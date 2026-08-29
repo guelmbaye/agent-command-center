@@ -1,0 +1,14 @@
+[project]
+name = "acc"
+version = "0.1.0"
+description = "ACC — Autonomous Mission Control : control plane for governed, recoverable enterprise agent missions"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

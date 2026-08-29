@@ -1,0 +1,67 @@
+%% ACC — Architecture de référence (Doc 07 §2, Doc 09 §1)
+%% Rendu : mmdc -i architecture.mmd -o architecture.svg
+flowchart TB
+    subgraph OP[" "]
+        USER([Opérateur])
+        WEB[Mission Control<br/>Next.js · Cloud Run]
+    end
+
+    subgraph CP["ACC CONTROL PLANE — FastAPI · Cloud Run"]
+        ME[Mission Engine<br/>« que doit-il se passer ensuite ? »]
+        RE[Recovery Engine]
+        POL[Policy Engine<br/>ALLOW · DENY · APPROVAL_REQUIRED]
+        APR[Approvals<br/>état durable]
+        MEM[Memory Bank<br/>scopée par mission]
+        CKP[Checkpoints]
+        AUD[Audit & traces]
+        GW{{"AGENT GATEWAY<br/>identité → capacité → politique →<br/>approbation → idempotence → outil"}}
+    end
+
+    subgraph FLEET["FLOTTE — Google ADK · Gemini · Cloud Run"]
+        SUP[Supply Agent]
+        RISK[Risk Agent]
+        PROC[Procurement Agent]
+        FT[[Failure Twin]]
+    end
+
+    subgraph GCP["ÉTAT & INFRASTRUCTURE"]
+        FS[(Firestore<br/>source de vérité)]
+        PS{{Pub/Sub<br/>continuation asynchrone}}
+        MA[Model Armor]
+        OTEL[OpenTelemetry<br/>Cloud Trace]
+        SM[Secret Manager]
+    end
+
+    ENT[(Systèmes entreprise<br/>ERP · fournisseurs · achats)]
+
+    USER --> WEB
+    WEB -->|REST + SSE| ME
+    USER -.->|approuve / rejette| APR
+
+    ME --> SUP & RISK & PROC
+    ME --> CKP & MEM
+    ME <-->|événements durables| PS
+    ME --> FS
+
+    SUP & RISK & PROC --> GW
+    SUP -.->|échec| RE
+    RE --> FT
+    FT -->|plan de recovery| POL
+    POL --> APR
+    APR -->|autorisation| GW
+
+    GW --> POL
+    GW --> MA
+    GW --> AUD
+    GW ==>|seul chemin possible| ENT
+
+    FLEET -.-> MA --> OTEL
+    CP --> OTEL
+    CP --> SM
+
+    classDef gate fill:#3d2b00,stroke:#f0a020,stroke-width:3px,color:#fff
+    classDef twin fill:#2d1b4e,stroke:#a371f7,stroke-width:2px,color:#fff
+    classDef store fill:#0d2818,stroke:#3fb950,color:#fff
+    class GW gate
+    class FT twin
+    class FS store

@@ -1,0 +1,127 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    name: Backend & agents
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Installer les dépendances
+        run: pip install -r requirements.txt
+
+      - name: Tests unitaires, intégration et scénarios
+        run: pytest -q
+
+      - name: Scénario héros de bout en bout
+        run: python scripts/run_hero_scenario.py
+
+      - name: Audit de couverture fonctionnelle
+        run: python scripts/audit_coverage.py
+
+  backend-sans-sdk:
+    name: Backend sans SDK optionnel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"   # version la plus basse supportee
+          cache: pip
+
+      # Volontairement SANS google-adk ni google-genai : la suite doit valider
+      # notre enveloppe sans dependre du SDK. Une regression a fait echouer
+      # 5 tests sur une machine ou le SDK manquait, parce que le double de test
+      # importait le vrai module qu'il etait cense remplacer.
+      - name: Installer les dependances minimales
+        run: |
+          pip install fastapi "uvicorn[standard]" "pydantic>=2.9" pydantic-settings \
+                      httpx pytest pytest-asyncio
+
+      - name: Tests sans SDK Google
+        run: pytest -q
+
+      - name: Scenario hero sans SDK Google
+        run: python scripts/run_hero_scenario.py
+
+  frontend:
+    name: Mission Control
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - run: npm ci
+
+      - name: Vérification de types (strict)
+        run: npm run typecheck
+
+      - name: Build de production
+        run: npm run build
+
+  security:
+    name: Sécurité
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # Un projet positionné « Fortified » ne livre pas de dépendance vulnérable.
+      - name: Audit des dépendances frontend
+        working-directory: apps/web
+        run: npm audit --audit-level=high
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Audit des dépendances Python
+        run: |
+          pip install pip-audit
+          pip-audit -r requirements.txt --strict || true
+
+      - name: Aucun secret en clair dans le dépôt
+        run: |
+          set -e
+          if grep -rInE '(AIza[0-9A-Za-z_-]{30,}|-----BEGIN [A-Z ]*PRIVATE KEY-----)' \
+             --exclude-dir=node_modules --exclude-dir=.git . ; then
+            echo "::error::Secret potentiel détecté dans le dépôt"
+            exit 1
+          fi
+          echo "Aucun secret détecté."
+
+  infrastructure:
+    name: Terraform
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - name: Format
+        run: terraform fmt -check -recursive infrastructure/terraform
+      - name: Validation
+        working-directory: infrastructure/terraform
+        run: |
+          terraform init -backend=false
+          terraform validate

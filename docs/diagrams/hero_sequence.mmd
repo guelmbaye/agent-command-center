@@ -1,0 +1,53 @@
+%% ACC — Séquence du scénario héros (Doc 06 §3, Doc 10 §12)
+sequenceDiagram
+    autonumber
+    participant OP as Opérateur
+    participant ME as Mission Engine
+    participant SUP as Supply Agent
+    participant FT as Failure Twin
+    participant POL as Policy Engine
+    participant GW as Agent Gateway
+    participant ENT as Systèmes entreprise
+
+    OP->>ME: Créer mission (1200 u., 48 h)
+    ME->>SUP: Analyser SUP-A
+    SUP->>GW: supplier.status
+    GW->>ENT: GET /suppliers/SUP-A
+    ENT--xGW: HTTP 503
+    GW-->>SUP: FAILED (DEPENDENCY)
+    SUP-->>ME: NON_RETRYABLE_FAILURE
+
+    Note over ME: mission → AT_RISK<br/>checkpoint persisté
+
+    ME->>FT: Diagnostiquer et proposer
+    FT->>GW: supplier.alternatives
+    GW->>ENT: GET /suppliers
+    ENT-->>FT: SUP-B (36 h) · SUP-C (60 h)
+
+    Note over FT: SUP-C moins cher ET moins risqué<br/>mais 60 h > 48 h → NON PERMIS<br/>retry → interdit (DEPENDENCY)
+
+    FT-->>ME: Plan : basculer vers SUP-B
+
+    rect rgb(45, 27, 78)
+        Note over FT,POL: La recovery est elle-même gouvernée
+        ME->>POL: recovery.apply
+        POL-->>ME: ALLOW (risque MEDIUM)
+    end
+
+    ME->>GW: purchase.execute · 18 000 $
+    GW->>POL: évaluer
+    POL-->>GW: APPROVAL_REQUIRED (> 5 000 $)
+    GW-->>ME: approbation demandée
+
+    Note over ME: mission → WAITING_APPROVAL<br/>état durable, runtime jetable
+
+    ME--xME: runtime interrompu
+    ME->>ME: reprise depuis CP-7<br/>aucune tâche rejouée
+
+    OP->>ME: APPROUVER
+    ME->>GW: purchase.execute (clé idempotente)
+    GW->>ENT: POST /procurement/purchase
+    ENT-->>GW: PO-8831
+    GW-->>ME: SUCCESS + audit
+
+    Note over ME,ENT: MISSION TERMINÉE · 1 seul achat<br/>0 violation de politique

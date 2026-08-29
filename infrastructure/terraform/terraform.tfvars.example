@@ -1,0 +1,6 @@
+project_id  = "acc-hackathon-2026"
+region      = "europe-west1"
+image_api   = "europe-west1-docker.pkg.dev/acc-hackathon-2026/acc/acc-api:latest"
+image_mock  = "europe-west1-docker.pkg.dev/acc-hackathon-2026/acc/acc-mock-enterprise:latest"
+acc_env     = "demo"
+agent_mode  = "hybrid"

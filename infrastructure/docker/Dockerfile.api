@@ -1,0 +1,25 @@
+# ACC Control Plane — service Cloud Run `acc-api`
+FROM python:3.12-slim AS base
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY domain/ ./domain/
+COPY agents/ ./agents/
+COPY apps/ ./apps/
+
+# Utilisateur non root (exigence de posture de securite)
+RUN useradd --create-home --uid 1001 acc && chown -R acc:acc /app
+USER acc
+
+ENV PORT=8080
+EXPOSE 8080
+
+# Cloud Run fournit $PORT. 1 worker : l'etat vit dans Firestore, pas en memoire.
+CMD exec uvicorn apps.api.main:app --host 0.0.0.0 --port ${PORT} --workers 1

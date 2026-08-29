@@ -1,0 +1,39 @@
+# Pile ACC complete en local — `docker compose up`
+services:
+  acc-mock-enterprise:
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/Dockerfile.mock
+    ports: ["8081:8080"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8080/healthz')"]
+      interval: 5s
+      retries: 5
+
+  acc-api:
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/Dockerfile.api
+    ports: ["8080:8080"]
+    environment:
+      ACC_ENV: local
+      ACC_PERSISTENCE: memory
+      ACC_EVENT_BUS: inproc
+      ACC_AGENT_MODE: hybrid
+      ACC_MODEL_ARMOR: heuristic
+      ACC_DEMO_MODE: "1"
+      ACC_ENTERPRISE_BASE_URL: http://acc-mock-enterprise:8080
+      GOOGLE_GENAI_USE_VERTEXAI: "0"
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+    depends_on:
+      acc-mock-enterprise:
+        condition: service_healthy
+
+  acc-web:
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/Dockerfile.web
+      args:
+        NEXT_PUBLIC_ACC_API: http://localhost:8080
+    ports: ["3000:8080"]
+    depends_on: [acc-api]

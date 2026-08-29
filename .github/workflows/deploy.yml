@@ -1,0 +1,66 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environnement cible
+        required: true
+        default: demo
+        type: choice
+        options: [demo, production]
+
+concurrency:
+  group: deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: read
+      id-token: write # Workload Identity : aucune clé de service stockée
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.DEPLOY_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Build et push des images
+        env:
+          REPO: ${{ vars.REGION }}-docker.pkg.dev/${{ vars.PROJECT_ID }}/acc
+        run: |
+          gcloud auth configure-docker "${{ vars.REGION }}-docker.pkg.dev" --quiet
+          for svc in api mock web; do
+            docker build -f "infrastructure/docker/Dockerfile.${svc}" \
+              -t "${REPO}/acc-${svc}:${GITHUB_SHA}" .
+            docker push "${REPO}/acc-${svc}:${GITHUB_SHA}"
+          done
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - name: Appliquer l'infrastructure
+        working-directory: infrastructure/terraform
+        env:
+          REPO: ${{ vars.REGION }}-docker.pkg.dev/${{ vars.PROJECT_ID }}/acc
+        run: |
+          terraform init
+          terraform apply -auto-approve \
+            -var="project_id=${{ vars.PROJECT_ID }}" \
+            -var="region=${{ vars.REGION }}" \
+            -var="acc_env=${{ inputs.environment }}" \
+            -var="image_api=${REPO}/acc-api:${GITHUB_SHA}" \
+            -var="image_mock=${REPO}/acc-mock-enterprise:${GITHUB_SHA}" \
+            -var="image_web=${REPO}/acc-web:${GITHUB_SHA}"
+
+      - name: Contrôle de santé
+        working-directory: infrastructure/terraform
+        run: |
+          URL=$(terraform output -raw acc_api_url)
+          curl -fsS --retry 5 --retry-delay 5 "${URL}/healthz"
+          echo "ACC déployé : ${URL}"

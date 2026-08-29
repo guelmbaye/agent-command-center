@@ -1,0 +1,43 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root { color-scheme: dark; }
+
+body {
+  @apply bg-base text-ink antialiased;
+  font-feature-settings: "tnum" 1; /* chiffres tabulaires : pas de sautillement */
+}
+
+@layer components {
+  .panel {
+    @apply rounded-lg border border-edge bg-base-panel;
+  }
+  .panel-header {
+    @apply flex items-center justify-between border-b border-edge px-4 py-3;
+  }
+  .panel-title {
+    @apply font-mono text-[11px] uppercase tracking-[0.18em] text-ink-muted;
+  }
+  .btn {
+    @apply rounded border border-edge bg-base-raised px-3 py-1.5 font-mono text-xs
+           uppercase tracking-wider text-ink transition
+           hover:border-ink-muted disabled:cursor-not-allowed disabled:opacity-40;
+  }
+  .btn-approve {
+    @apply border-state-healthy/50 bg-state-healthy/10 text-state-healthy
+           hover:bg-state-healthy/20;
+  }
+  .btn-reject {
+    @apply border-state-failed/50 bg-state-failed/10 text-state-failed
+           hover:bg-state-failed/20;
+  }
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded border border-edge
+           bg-base-raised px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider;
+  }
+}
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #232d3d; border-radius: 4px; }
