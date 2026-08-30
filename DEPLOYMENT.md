@@ -851,6 +851,7 @@ automatically — nothing else to do.
 | CORS error from Mission Control | Almost always another server on the port: `curl` ignores CORS, browsers do not. `make doctor` tests the preflight |
 | CORS blocked once deployed | Run `python scripts/doctor.py --api <url>`: it now reproduces the browser preflight. If it reports **HTTP 404 with `Server: Google Frontend`**, the OPTIONS request never reached the container — the problem is at the Cloud Run edge, not in the app. Confirm with `gcloud run services logs read acc-api --region=REGION --limit=20`: no OPTIONS line means the request stopped before the container |
 | `AttributeError: '_IncludedRouter'` on every request | FastAPI auto-instrumentation, removed in ADR-052. It crashed **before** the CORS middleware, so the browser reported a CORS failure. Re-deploy from a current archive |
+| `Circuit open on demo` on a demo control | Fixed: operator controls are exempt from the breaker, which now also closes after 30 s (ADR-069). Re-deploy |
 | `Tool failure suppliers: HTTP 404` once deployed | The enterprise mock had internal-only ingress and the client sent no identity token (ADR-057). Re-run `make deploy` |
 | All missions go straight to recovery | The enterprise systems are not running: `make run-mock` in a second terminal |
 

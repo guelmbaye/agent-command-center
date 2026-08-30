@@ -300,14 +300,14 @@ hero mission) and Cloud Run stay inside the free tiers.
 
 | Check | Result |
 |---|---|
-| Python test suite | 423 tests green |
+| Python test suite | 431 tests green |
 | Functional coverage audit | 70/70 requirements linked to a real test |
 | Strict TypeScript typecheck | 0 errors |
 | Next.js production build | compiles, 103 kB shared JS |
 | npm audit | 0 vulnerabilities |
 | Hero scenario, single process | complete |
 | Hero scenario over real HTTP (2 services) | complete, SSE included |
-| Test suite **without** the Google SDK | 423 tests green |
+| Test suite **without** the Google SDK | 431 tests green |
 
 ```bash
 make audit   # links every blueprint requirement to an existing pytest node id
@@ -345,7 +345,7 @@ the one remaining blind spot.
 
 ## Design decisions
 
-`docs/ARCHITECTURE.md` records 68 numbered ADRs, including the bugs found by
+`docs/ARCHITECTURE.md` records 69 numbered ADRs, including the bugs found by
 running the system rather than reading it — a Pub/Sub race condition that the
 in-memory store hid, an idempotency cache that made recovery structurally
 impossible, and a mission deadlock after an approved escalation.

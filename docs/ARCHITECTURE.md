@@ -85,6 +85,7 @@ paste into <https://mermaid.live>.
 | 066 | Mutating the caller's object is not persisting | **Recovery loop in deterministic** |
 | 067 | A detector that cries wolf gets disabled | **False positive on \"injected\"** |
 | 068 | A decision window with no exit forces a decision | **Operator question** |
+| 069 | A breaker must protect, not imprison | **Reset blocked by its own repair** |
 
 ---
 
@@ -2178,3 +2179,48 @@ That is the product working. The script now says so.
 *truthful*. A script written from the intended design will drift from the
 built product, and only running it in front of a real screen surfaces the
 difference. The operator ran it. I had not.
+
+
+---
+
+## ADR-069 — A breaker must protect, not imprison
+
+**Context.** Hours before submission, every demo control answered:
+
+```
+502 DEMO_CONTROL_FAILED
+Enterprise systems unreachable at /demo/reset:
+Circuit open on demo after repeated failures
+```
+
+**Two defects, stacked.**
+
+1. **The breaker could never close.** It reset only on a successful call — and
+   while open, no call goes through, so no success can occur. Once tripped it
+   was a permanent outage wearing the costume of a safety mechanism.
+
+2. **The controls were gated by it.** Since ADR-060 routed the demo controls
+   through the shared enterprise client, their failures accumulated under the
+   `demo` key. `Reset` — the control an operator uses to **repair** a broken
+   state — was blocked by the breakage it repairs.
+
+That second one is ADR-024 in a new place: idempotency once blocked the recovery
+that was meant to fix the world. Here the breaker blocked the reset. **A repair
+must never sit behind the failure it repairs.**
+
+**Decision.** Operator-triggered controls are exempt: the breaker exists to stop
+an *agent* from hammering a failing dependency, not to stop a human from fixing
+it. And the breaker gained a 30-second cooldown, after which one call is let
+through — half-open, not reset: the counter returns to threshold minus one, so a
+still-broken dependency re-opens immediately instead of starting over.
+
+**Locked.** Tests assert the exemption, the eventual close, that protection
+still holds before the cooldown, and that half-open is a single probe rather
+than a clean slate. Removing the exemption fails the end-to-end reset test.
+
+**Lesson.** Every protection mechanism in this project has, at least once,
+protected the system against its own recovery. Idempotency against re-observing
+a corrected world (ADR-024). Deletion protection against the teardown that stops
+billing (ADR-044). Now a circuit breaker against the reset. The question to ask
+of any guard is not "what does it block?" but **"does it block the thing that
+would fix it?"**

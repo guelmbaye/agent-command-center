@@ -8,6 +8,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
+import time
+
 import httpx
 
 from apps.api.core.config import Settings, get_settings
@@ -41,7 +43,12 @@ class EnterpriseToolClient:
         self._transport = transport
         self._client: httpx.AsyncClient | None = None
         self._consecutive_failures: dict[str, int] = {}
+        self._opened_at: dict[str, float] = {}
         self._breaker_threshold = 3
+        # A breaker that only closes on success can never close: while it is
+        # open no call goes through, so no success can occur. It stopped being
+        # protection and became a permanent outage.
+        self._breaker_cooldown_s = 30.0
         self._identity_token: str | None = None
 
     def _fetch_identity_token(self) -> str | None:
@@ -93,8 +100,27 @@ class EnterpriseToolClient:
             await self._client.aclose()
             self._client = None
 
+    # Operator-triggered controls are never gated by the breaker. The breaker
+    # exists to stop an AGENT from hammering a failing dependency; the demo
+    # controls are how a human REPAIRS that state. Putting the repair behind
+    # the failure it repairs is the defect of ADR-024, in a second place:
+    # `Reset` answered 502 with "Circuit open on demo", and nothing the
+    # operator could click would ever close it.
+    UNGATED_TOOLS = frozenset({"demo"})
+
     def _breaker_open(self, tool: str) -> bool:
-        return self._consecutive_failures.get(tool, 0) >= self._breaker_threshold
+        if tool in self.UNGATED_TOOLS:
+            return False
+        if self._consecutive_failures.get(tool, 0) < self._breaker_threshold:
+            return False
+        opened = self._opened_at.get(tool)
+        if opened is not None and (time.monotonic() - opened) >= self._breaker_cooldown_s:
+            # Half-open: let one call through and judge on its result.
+            logger.info("circuit_breaker_half_open", extra={"tool": tool})
+            self._consecutive_failures[tool] = self._breaker_threshold - 1
+            self._opened_at.pop(tool, None)
+            return False
+        return True
 
     async def call(
         self, tool: str, method: str, path: str, **kwargs: Any
@@ -125,6 +151,8 @@ class EnterpriseToolClient:
                                       status_code=response.status_code, raw_text=text)
             except Exception as exc:
                 self._consecutive_failures[tool] = self._consecutive_failures.get(tool, 0) + 1
+            if self._consecutive_failures[tool] >= self._breaker_threshold:
+                self._opened_at.setdefault(tool, time.monotonic())
                 logger.error("tool_call_failed", extra={"tool": tool, "detail": str(exc)})
                 return ToolCallResult(
                     ok=False, data={}, status_code=0,
