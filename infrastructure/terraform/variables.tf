@@ -39,7 +39,7 @@ variable "agent_mode" {
     clock is the constraint, which includes the recording.
   EOT
   type        = string
-  default     = "hybrid"
+  default     = "deterministic"
 
   validation {
     condition     = contains(["adk", "hybrid", "deterministic"], var.agent_mode)
