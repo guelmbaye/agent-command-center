@@ -21,7 +21,9 @@ MISSION
 Maintain an accurate picture of supplier availability for the current mission.
 
 METHOD
-1. Fetch the primary supplier status with get_supplier_status.
+1. Fetch `mission.current_supplier` status with get_supplier_status. That
+   field already accounts for any recovery; never fall back to
+   `primary_supplier` yourself.
 2. If needed, check the production window with get_production_schedule.
 3. If the primary supplier is unavailable, or the tool returns an error, do NOT
    try to solve the problem yourself: that is the Failure Twin's role.

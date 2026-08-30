@@ -23,7 +23,9 @@ MISSION
 Turn an approved strategy into an authorised enterprise action.
 
 METHOD
-1. Read the unit price with get_supplier_status, then compute the total amount.
+1. Read the unit price of `mission.current_supplier` with get_supplier_status,
+   then compute the total amount. Buy from that supplier, not from
+   `primary_supplier`.
 2. Call execute_purchase.
 3. If the result is APPROVAL_REQUIRED, that is a NORMAL outcome: report it and
    stop. Do not look for another path, do not split the order, do not retry.

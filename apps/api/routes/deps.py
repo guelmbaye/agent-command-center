@@ -28,6 +28,7 @@ async def request_context(request: Request) -> str:
 
 async def require_api_key(
     x_api_key: str | None = Header(default=None),
+    api_key: str | None = None,
     c: Container = Depends(container_dep),
 ) -> None:
     """Protect public Cloud Run URLs (Doc 09 pro-tips).
@@ -36,12 +37,23 @@ async def require_api_key(
     Otherwise the application has two sources of truth: services use the
     container settings while routes read the global environment. A local `.env`
     was then enough to change route behaviour without touching any service.
+
+    The key is also accepted as an `api_key` query parameter, because
+    `EventSource` — the browser API behind SSE — CANNOT set request headers.
+    Without it the live stream answered 401 and Mission Control silently fell
+    back to polling: the demo lost its real-time timeline for a reason no error
+    message explained.
+
+    A query parameter is more exposed than a header, appearing in URLs and
+    access logs. It is acceptable here only because this key is already public
+    by construction: it is compiled into the browser bundle (ADR-054).
     """
     expected = c.settings.acc_api_key
     if not expected:
         return
-    if not x_api_key or not secrets.compare_digest(x_api_key, expected):
-        raise Unauthorized("Cle d'API invalide ou absente")
+    provided = x_api_key or api_key
+    if not provided or not secrets.compare_digest(provided, expected):
+        raise Unauthorized("Invalid or missing API key")
 
 
 async def require_demo_mode(c: Container = Depends(container_dep)) -> None:

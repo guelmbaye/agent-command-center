@@ -34,6 +34,7 @@ export default function MissionControl() {
   const [missions, setMissions] = useState<MissionSummary[]>([]);
   const [justCreated, setJustCreated] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
+  const [deferredApprovalId, setDeferredApprovalId] = useState<string | null>(null);
 
   const { mission, events, live, error, refresh } = useMissionStream(missionId);
 
@@ -126,10 +127,16 @@ export default function MissionControl() {
     void loadMissions();
   }, [refresh, loadSideData, loadMissions]);
 
-  const blockingApproval =
+  const pendingApproval =
     approvals.find(
       (a) => a.mission_id === missionId && a.action === "purchase.execute",
     ) ?? approvals.find((a) => a.mission_id === missionId) ?? null;
+
+  // An approval the operator chose to inspect before deciding. It stays
+  // pending in the control plane — only this window is closed — and a banner
+  // keeps it one click away, so a deferred decision can never be lost.
+  const deferred = deferredApprovalId === pendingApproval?.approval_id;
+  const blockingApproval = deferred ? null : pendingApproval;
 
   return (
     <main className="mx-auto max-w-[1600px] space-y-4 p-4 lg:p-6">
@@ -207,6 +214,7 @@ export default function MissionControl() {
               <DemoControls
                 missionId={missionId}
                 missionStatus={mission?.status}
+                agentMode={policy?.agent_mode}
                 onChange={refreshAll}
               />
               <PolicyPanel policy={policy} />
@@ -214,11 +222,48 @@ export default function MissionControl() {
           </div>
         </>
       ) : (
-        <EmptyState onLaunch={() => setShowForm(true)} launching={launching} />
+        // The side column stays mounted with no mission. Hiding it made the
+        // documented demo order impossible: Reset clears every mission, and
+        // "Fail SUP-A" must be armed BEFORE launching — a nominal mission
+        // finishes in 0.3 s, so a failure injected afterwards has no effect.
+        // The operator was left with a Reset button that removed the Reset
+        // button.
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
+          <EmptyState onLaunch={() => setShowForm(true)} launching={launching} />
+          <aside className="space-y-4">
+            <FleetPanel agents={agents} mission={null} />
+            <DemoControls
+              missionId={null}
+              missionStatus={undefined}
+              agentMode={policy?.agent_mode}
+              onChange={refreshAll}
+            />
+            <PolicyPanel policy={policy} />
+          </aside>
+        </div>
       )}
 
       {blockingApproval && (
-        <ApprovalModal approval={blockingApproval} onDecided={refreshAll} />
+        <ApprovalModal
+          approval={blockingApproval}
+          onDecided={() => {
+            setDeferredApprovalId(null);
+            refreshAll();
+          }}
+          onDismiss={() => setDeferredApprovalId(blockingApproval.approval_id)}
+        />
+      )}
+
+      {deferred && pendingApproval && (
+        <button
+          type="button"
+          onClick={() => setDeferredApprovalId(null)}
+          className="fixed bottom-4 right-4 z-40 rounded border border-warn
+                     bg-surface px-4 py-2 text-xs text-warn shadow-lg
+                     hover:text-ink"
+        >
+          ▲ {pendingApproval.approval_id} awaiting your decision — review
+        </button>
       )}
     </main>
   );
@@ -278,7 +323,7 @@ function EmptyState({
   return (
     <section className="panel flex flex-col items-center justify-center gap-4 py-20">
       <p className="font-mono text-xs uppercase tracking-[0.2em] text-ink-dim">
-        Aucune mission active
+        No active mission
       </p>
       <p className="max-w-md text-center text-sm text-ink-muted">
         Launch a production-continuity mission, then inject a supplier failure to

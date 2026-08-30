@@ -214,3 +214,70 @@ def test_script_threshold_matches_the_policy_engine():
     settings = make_settings()
     assert settings.policy_purchase_autonomous_max == 5_000.0
     assert re.search(r"5\s*000", SCRIPT)
+
+
+# ---------------------------------------------------------------------------
+# The interface must allow the order the script prescribes
+#
+# Observed on the deployed instance: pressing Reset removed every mission, and
+# with it the whole side column — including the Reset button and "Fail SUP-A".
+# The documented order became impossible to perform:
+#
+#     reset -> arm -> launch -> decide
+#
+# The failure MUST be armed before launching: a nominal mission finishes in
+# 0.3 s, so a failure injected afterwards has no effect at all.
+# ---------------------------------------------------------------------------
+WEB = Path(__file__).resolve().parents[2] / "apps" / "web"
+
+
+def test_demo_controls_survive_an_empty_mission_list():
+    """A Reset button that removes the Reset button is a trap."""
+    page = (WEB / "app" / "page.tsx").read_text(encoding="utf-8")
+    empty_branch = page[page.index("<EmptyState"):]
+    for component in ("DemoControls", "PolicyPanel", "FleetPanel"):
+        assert component in empty_branch, (
+            f"{component} disappears with no mission: the script's order "
+            f"(reset -> arm -> launch) cannot be performed"
+        )
+
+
+def test_interrupt_and_resume_are_disabled_without_a_live_mission():
+    """They need a running mission; the backend refuses them otherwise."""
+    controls = (WEB / "components" / "DemoControls.tsx").read_text(encoding="utf-8")
+    assert "const liveMission = Boolean(missionId) && !settled" in controls
+    assert "Arm a failure, then launch a mission" in controls, (
+        "the reason must distinguish 'no mission' from 'mission finished'"
+    )
+
+
+def test_the_script_states_the_mandatory_order():
+    assert "reset → arm → launch → decide" in SCRIPT
+    assert "0.3 seconds" in SCRIPT
+
+
+def test_the_modal_can_be_dismissed_without_deciding():
+    """ACC claims an approval is durable state, not a UI session.
+
+    A modal with no exit contradicted that: the operator could not open the
+    Recovery tab to read the evidence, nor reach the demo controls, without
+    first approving or rejecting — deciding before inspecting, the exact habit
+    the product exists to prevent.
+    """
+    modal = (WEB / "components" / "ApprovalModal.tsx").read_text(encoding="utf-8")
+    assert "onDismiss" in modal
+    assert "Decide later" in modal
+
+    page = (WEB / "app" / "page.tsx").read_text(encoding="utf-8")
+    assert "deferredApprovalId" in page
+    assert "awaiting your decision" in page, (
+        "a deferred approval must stay one click away, never disappear"
+    )
+
+
+def test_the_script_matches_the_real_sequence():
+    """The modal arrives before the Recovery tab can be opened."""
+    assert "The approval modal is already up" in SCRIPT
+    assert "Decide later" in SCRIPT
+    # And the durability proof must not claim to run with the modal open.
+    assert "with the modal dismissed" in SCRIPT

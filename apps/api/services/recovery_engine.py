@@ -287,18 +287,31 @@ class RecoveryEngine:
             supplier_id = params.get("supplier_id")
             if not supplier_id:
                 return "FAIL", "No alternative supplier in the plan"
-            mission.context.selected_supplier = supplier_id
-            unit_price = params.get("unit_price")
-            if unit_price is not None:
-                mission.context.unit_price = float(unit_price)
-                mission.context.purchase_amount = round(
-                    float(unit_price) * mission.context.required_units, 2
-                )
+            # Reload, mutate, save. The switch must land in the STORE, not on
+            # whichever object this caller happens to hold.
+            #
+            # Deployed, the retry kept querying SUP-A and the mission burned
+            # its attempt budget while the recovery was correct every time. In
+            # memory, object instances are shared, so mutating the caller's
+            # mission was enough and every local test passed. Firestore returns
+            # a fresh copy on each read and `save_mission` is a whole-document
+            # `set()`: a later save of an object loaded BEFORE the switch
+            # silently erased it.
+            stored = await self.store.get_mission(mission.mission_id) or mission
+            for target in {id(stored): stored, id(mission): mission}.values():
+                target.context.selected_supplier = supplier_id
+                unit_price = params.get("unit_price")
+                if unit_price is not None:
+                    target.context.unit_price = float(unit_price)
+                    target.context.purchase_amount = round(
+                        float(unit_price) * target.context.required_units, 2
+                    )
+            await self.store.save_mission(stored)
             await self.memory.write(
                 mission.mission_id, MemoryType.DECISION,
-                {"decision": f"Fournisseur {supplier_id} retenu",
+                {"decision": f"Supplier {supplier_id} selected",
                  "reason": plan.rationale,
-                 "amount": mission.context.purchase_amount},
+                 "amount": stored.context.purchase_amount},
                 source="recovery-engine",
             )
             return "RETRY_TASK", f"Switched to {supplier_id}"

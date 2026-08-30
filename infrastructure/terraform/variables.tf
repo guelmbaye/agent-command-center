@@ -25,9 +25,26 @@ variable "acc_env" {
 }
 
 variable "agent_mode" {
-  description = "adk | hybrid | deterministic"
+  description = <<-EOT
+    adk | hybrid | deterministic
+
+    `hybrid` calls Gemini and falls back to the deterministic path on failure.
+    Each call takes 10-20 s, so a full hero scenario runs about two minutes —
+    half of a four-minute video spent watching spinners.
+
+    `deterministic` exercises the SAME Gateway, the same policy decisions and
+    the same audit trail with no model call at all, in under a second.
+
+    Use `hybrid` to show the model reasoning. Use `deterministic` when the
+    clock is the constraint, which includes the recording.
+  EOT
   type        = string
-  default     = "hybrid"
+  default     = "deterministic"
+
+  validation {
+    condition     = contains(["adk", "hybrid", "deterministic"], var.agent_mode)
+    error_message = "agent_mode must be adk, hybrid or deterministic."
+  }
 }
 
 variable "gemini_model" {
@@ -48,7 +65,19 @@ variable "max_instances_api" {
 }
 
 variable "monthly_budget_usd" {
-  description = "Budget mensuel indicatif, utilisé par scripts/costs.sh"
+  description = "Indicative monthly budget, reported by scripts/costs.py"
   type        = number
   default     = 50
+}
+
+variable "cors_origin_regex" {
+  description = "Origins allowed by regex. Cloud Run subdomains are generated at deploy time, so an exact list is not enough."
+  type        = string
+  default     = "https://acc-(web|api)-[a-z0-9-]+\\.(a\\.)?run\\.app|https://acc-(web|api)-[0-9]+\\.[a-z0-9-]+\\.run\\.app"
+}
+
+variable "cors_origins" {
+  description = "Extra exact origins, comma separated. Usually empty: Cloud Run URLs are matched by cors_origin_regex."
+  type        = string
+  default     = ""
 }

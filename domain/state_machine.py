@@ -60,7 +60,7 @@ def can_transition(current: MissionStatus, target: MissionStatus) -> bool:
 def assert_transition(current: MissionStatus, target: MissionStatus, mission_id: str = "") -> None:
     if not can_transition(current, target):
         raise InvalidState(
-            f"Transition de mission interdite {current.value} -> {target.value}",
+            f"Forbidden mission transition {current.value} -> {target.value}",
             mission_id=mission_id, current=current.value, target=target.value,
         )
 
@@ -68,7 +68,7 @@ def assert_transition(current: MissionStatus, target: MissionStatus, mission_id:
 def assert_task_transition(current: TaskStatus, target: TaskStatus, task_id: str = "") -> None:
     if target not in TASK_TRANSITIONS.get(current, set()):
         raise InvalidState(
-            f"Transition de tache interdite {current.value} -> {target.value}",
+            f"Forbidden task transition {current.value} -> {target.value}",
             task_id=task_id, current=current.value, target=target.value,
         )
 
@@ -76,7 +76,7 @@ def assert_task_transition(current: TaskStatus, target: TaskStatus, task_id: str
 def assert_agent_transition(current: AgentStatus, target: AgentStatus, agent_id: str = "") -> None:
     if target not in AGENT_TRANSITIONS.get(current, set()):
         raise InvalidState(
-            f"Transition d'agent interdite {current.value} -> {target.value}",
+            f"Forbidden agent transition {current.value} -> {target.value}",
             agent_id=agent_id, current=current.value, target=target.value,
         )
 

@@ -18,12 +18,29 @@ router = APIRouter(prefix="/api/v1/events", tags=["events"])
 @router.post("/pubsub")
 async def pubsub_push(
     payload: dict,
+    token: str | None = None,
     x_pubsub_token: str | None = Header(default=None),
     c: Container = Depends(container_dep),
 ) -> Response:
-    """Receive a Pub/Sub push message and route it to the Mission Engine."""
+    """Receive a Pub/Sub push message and route it to the Mission Engine.
+
+    The shared token arrives in the QUERY STRING, not in a header: a Pub/Sub
+    push subscription cannot send custom headers. It only carries an OIDC token
+    in `Authorization`, which Cloud Run verifies before the request ever
+    reaches this code.
+
+    Checking a header Pub/Sub cannot send rejected every push with 401. The
+    subscription retried, the messages expired, and missions stayed frozen at
+    `planning` with no error visible anywhere in the application.
+
+    The header is still accepted, for a caller that can set one.
+    """
     expected = c.settings.pubsub_push_token
-    if expected and x_pubsub_token != expected:
+    if expected and expected not in (token, x_pubsub_token):
+        logger.warning("pubsub_push_rejected", extra={
+            "reason": "token mismatch",
+            "hint": "the subscription must carry ?token=... in its push endpoint",
+        })
         return Response(status_code=401)
 
     message = payload.get("message", {})

@@ -61,3 +61,29 @@ resource "google_cloud_run_v2_service_iam_member" "pubsub_calls_api" {
   role     = "roles/run.invoker"
   member   = "serviceAccount:${google_service_account.pubsub_invoker.email}"
 }
+
+# ----------------------------------------------------------------------------
+# Pub/Sub push : le SERVICE AGENT doit pouvoir forger un jeton OIDC au nom de
+# `pubsub_invoker`. Sans ce role, la souscription se cree mais chaque push est
+# rejete par Cloud Run — la mission reste bloquee en CREATED, sans erreur
+# visible cote application.
+# ----------------------------------------------------------------------------
+data "google_project" "current" {
+  project_id = var.project_id
+}
+
+resource "google_service_account_iam_member" "pubsub_agent_mints_tokens" {
+  service_account_id = google_service_account.pubsub_invoker.name
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member = format(
+    "serviceAccount:service-%s@gcp-sa-pubsub.iam.gserviceaccount.com",
+    data.google_project.current.number,
+  )
+}
+
+# Mission Control ecrit ses logs comme les autres services.
+resource "google_project_iam_member" "web_logging" {
+  project = var.project_id
+  role    = "roles/logging.logWriter"
+  member  = "serviceAccount:${google_service_account.web.email}"
+}

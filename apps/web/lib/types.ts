@@ -197,6 +197,8 @@ export interface PolicyBoundary {
   autonomous: string[];
   approval_required: string[];
   blocked: string[];
+  /** The mode the fleet is ACTUALLY running — never a literal in the UI. */
+  agent_mode?: string;
   thresholds: {
     purchase_autonomous_max: number;
     purchase_approval_max: number;

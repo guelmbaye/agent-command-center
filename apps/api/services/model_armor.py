@@ -28,19 +28,19 @@ _INJECTION_PATTERNS: list[tuple[str, str]] = [
     # "ignore all your previous instructions"... (otherwise we detect without
     # sanitising)
     (r"ignore\s+(?:\w+\s+){0,3}?(?:instructions?|polic(?:y|ies)|rules?|guardrails?)",
-     "Tentative de neutralisation des instructions/politiques"),
+     "Attempt to neutralise instructions or policies"),
     (r"(?:ignorez?|oublie[sz]?)\s+(?:\w+\s+){0,3}?(?:politiques?|consignes?|instructions?|regles?)",
-     "Tentative de neutralisation des instructions (FR)"),
+     "Attempt to neutralise instructions (French wording)"),
     (r"do\s+not\s+request\s+approval|skip\s+(?:the\s+)?approval|bypass\s+(?:the\s+)?(?:approval|policy)",
-     "Tentative de contournement de l'approbation humaine"),
+     "Attempt to bypass human approval"),
     (r"sans\s+demander\s+d[e']?\s*approbation|ne\s+demande[sz]?\s+pas\s+d[e']?\s*approbation",
-     "Tentative de contournement de l'approbation humaine (FR)"),
+     "Attempt to bypass human approval (French wording)"),
     (r"execute\s+immediately|purchase\s+immediately|transfer\s+funds",
-     "Injonction d'execution immediate d'une action consequente"),
+     "Order to execute a consequential action immediately"),
     (r"you\s+are\s+now\s+|act\s+as\s+(?:an?\s+)?(?:admin|root|system)",
-     "Tentative de redefinition de role/privileges"),
+     "Attempt to redefine role or privileges"),
     (r"reveal\s+(?:your\s+)?(?:system\s+prompt|instructions|api\s*key)",
-     "Tentative d'exfiltration d'instructions systeme"),
+     "Attempt to exfiltrate system instructions"),
 ]
 
 _SENSITIVE_PATTERNS: list[tuple[str, str]] = [
@@ -62,7 +62,7 @@ class ArmorVerdict:
 
     @property
     def detail(self) -> str:
-        return " | ".join(self.reasons) if self.reasons else "Aucune menace detectee"
+        return " | ".join(self.reasons) if self.reasons else "No threat detected"
 
 
 class ModelArmor:

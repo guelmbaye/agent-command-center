@@ -265,3 +265,35 @@ async def test_capacity_shortfall_activates_the_failure_twin(client, container):
     assert "capacity" in recoveries[0]["diagnosis"].lower()
     assert not any(o["permitted"] and o["strategy"] == "USE_ALTERNATIVE_SUPPLIER"
                    for o in recoveries[0]["options"])
+
+
+# ---------------------------------------------------------------------------
+# SSE authentication
+#
+# `EventSource` — the browser API behind SSE — CANNOT set request headers.
+# The live stream therefore answered 401 and Mission Control silently fell back
+# to polling: the demo lost its real-time timeline, and no error explained why.
+# ---------------------------------------------------------------------------
+async def test_api_key_is_accepted_as_a_query_parameter():
+    from apps.api.routes.deps import require_api_key
+    from apps.api.services.container import build_container
+    from apps.api.repositories.factory import reset_store
+    from apps.api.routes.deps import Unauthorized
+    from tests.conftest import make_settings
+
+    reset_store()
+    container = build_container(make_settings(acc_api_key="secret-key"))
+
+    await require_api_key(x_api_key="secret-key", api_key=None, c=container)
+    await require_api_key(x_api_key=None, api_key="secret-key", c=container)
+
+    for bad in (None, "", "wrong"):
+        with pytest.raises(Unauthorized):
+            await require_api_key(x_api_key=None, api_key=bad, c=container)
+    reset_store()
+
+
+async def test_stream_refuses_a_request_without_a_key(secured_client):
+    """The stream is protected like every other /api/v1 route."""
+    response = await secured_client.get("/api/v1/missions/MIS-1/stream")
+    assert response.status_code == 401

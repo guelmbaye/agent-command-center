@@ -111,8 +111,9 @@ it fires because the situation changed.
                   Enterprise systems (ERP, suppliers, procurement)
 ```
 
-Diagrams: `docs/diagrams/architecture.mmd` and `docs/diagrams/hero_sequence.mmd`
-(render with `mmdc`, or paste into <https://mermaid.live>).
+Diagrams: `docs/diagrams/architecture.png` (rendered, ready to view) alongside
+the Mermaid sources `architecture.mmd` and `hero_sequence.mmd`. Rebuild the PNG
+with `python scripts/make_architecture_diagram.py` — no browser, no Mermaid CLI.
 
 **The Gateway pipeline is mandatory and cannot be bypassed:**
 
@@ -270,13 +271,17 @@ drops, it falls back to polling on its own.
 
 ## Deployment
 
-```bash
-PROJECT_ID=my-project ./scripts/deploy.sh   # detailed procedure: DEPLOYMENT.md
 ```
+python scripts/deploy.py --project-id my-project   # detail: DEPLOYMENT.md
+```
+
+Works identically on Windows, macOS and Linux — no bash required.
 
 Cost tracking and teardown:
 
-```bash
+```
+make plan       # terraform plan, no image built
+make deploy     # three images + terraform apply
 make costs      # budget, scaling guardrails, volumetry
 make teardown   # brings billing back to zero
 ```
@@ -295,14 +300,14 @@ hero mission) and Cloud Run stay inside the free tiers.
 
 | Check | Result |
 |---|---|
-| Python test suite | 270 tests green |
-| Functional coverage audit | 66/66 requirements linked to a real test |
+| Python test suite | 423 tests green |
+| Functional coverage audit | 70/70 requirements linked to a real test |
 | Strict TypeScript typecheck | 0 errors |
 | Next.js production build | compiles, 103 kB shared JS |
 | npm audit | 0 vulnerabilities |
 | Hero scenario, single process | complete |
 | Hero scenario over real HTTP (2 services) | complete, SSE included |
-| Test suite **without** the Google SDK | 270 tests green |
+| Test suite **without** the Google SDK | 423 tests green |
 
 ```bash
 make audit   # links every blueprint requirement to an existing pytest node id
@@ -340,7 +345,7 @@ the one remaining blind spot.
 
 ## Design decisions
 
-`docs/ARCHITECTURE.md` records 37 numbered ADRs, including the bugs found by
+`docs/ARCHITECTURE.md` records 68 numbered ADRs, including the bugs found by
 running the system rather than reading it — a Pub/Sub race condition that the
 in-memory store hid, an idempotency cache that made recovery structurally
 impossible, and a mission deadlock after an approved escalation.

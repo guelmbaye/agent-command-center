@@ -73,5 +73,15 @@ class CapabilityDenied(ACCError):
     code, http_status = "CAPABILITY_DENIED", 403
 
 
+class DemoControlFailed(ACCError):
+    """A demo control could not complete, and says which step failed.
+
+    A bare 500 on a demo control, minutes before a recording, tells the
+    operator nothing about where to look.
+    """
+
+    code, http_status = "DEMO_CONTROL_FAILED", 502
+
+
 class DemoDisabled(ACCError):
     code, http_status = "DEMO_DISABLED", 403

@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from apps.api.core.config import api_key_source, get_settings
+from apps.api.core.config import Settings, api_key_source, get_settings
 from apps.api.core.errors import register_error_handlers
 from apps.api.core.logging import configure_logging, get_logger
 from apps.api.core.telemetry import configure_telemetry
@@ -61,21 +61,32 @@ app = FastAPI(
 # CORS: Starlette does NOT support wildcards in `allow_origins` — an entry
 # like "https://acc-web-*.run.app" is never matched and the browser blocks the
 # request. Patterns go through `allow_origin_regex`.
-_CORS_ORIGIN_REGEX = (
-    r"https://acc-web[-\w]*\.[-\w]*\.?run\.app"  # revisions Cloud Run
-    r"|http://(localhost|127\.0\.0\.1)(:\d+)?"      # postes de developpement
-)
+#
+# The pattern comes from CONFIGURATION, never from a constant. A hardcoded
+# regex here silently ignored ACC_CORS_ORIGIN_REGEX: the operator could set it
+# on Cloud Run, see it in the plan, see it in the container environment — and
+# it changed nothing. A setting that cannot be overridden is not a setting.
+def cors_options(config: Settings) -> dict[str, object]:
+    """CORS middleware arguments — the SINGLE source for app and tests.
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"] if not settings.is_cloud else [],
-    allow_origin_regex=None if not settings.is_cloud else _CORS_ORIGIN_REGEX,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-    expose_headers=["x-request-id"],
-    max_age=600,
-)
+    Tests used to rebuild this wiring themselves. They therefore validated
+    their own copy, and passed for years while production used a hardcoded
+    regex that ignored the configuration entirely. A double that reimplements
+    what it checks proves nothing about the real path.
+    """
+    regex = config.acc_cors_origin_regex.strip() or None
+    return {
+        "allow_origins": ["*"] if not config.is_cloud else config.cors_origins,
+        "allow_origin_regex": None if not config.is_cloud else regex,
+        "allow_credentials": True,
+        "allow_methods": ["*"],
+        "allow_headers": ["*"],
+        "expose_headers": ["x-request-id"],
+        "max_age": 600,
+    }
+
+
+app.add_middleware(CORSMiddleware, **cors_options(settings))
 
 register_error_handlers(app)
 
@@ -87,45 +98,22 @@ app.include_router(metrics.router)
 app.include_router(events.router)
 app.include_router(demo.router)
 
-def _otel_instrumentation_is_compatible(application: FastAPI) -> bool:
-    """Check that auto-instrumentation can read THIS FastAPI's routes.
-
-    Since FastAPI 0.141, included routers are wrapped in `_IncludedRouter`
-    objects that do not expose `.path`. Older versions of
-    opentelemetry-instrumentation-fastapi assume they do and raise an
-    AttributeError ON EVERY REQUEST — the API becomes unusable.
-
-    So we probe the actually installed function before enabling it, rather than
-    trusting a version constraint.
-    """
-    try:
-        from opentelemetry.instrumentation.fastapi import _get_route_details
-
-        scope = {
-            "type": "http", "method": "GET", "path": "/healthz",
-            "headers": [], "app": application, "root_path": "",
-        }
-        _get_route_details(scope)
-        return True
-    except Exception as exc:
-        logger.warning("otel_fastapi_instrumentation_incompatible", extra={
-            "detail": str(exc),
-            "hint": "Le tracage de mission reste actif ; seuls les spans HTTP "
-                    "automatiques sont desactives. "
-                    "Corriger : pip install -U opentelemetry-instrumentation-fastapi",
-        })
-        return False
-
-
-if settings.otel_traces_exporter != "none":
-    try:
-        from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-
-        if _otel_instrumentation_is_compatible(app):
-            FastAPIInstrumentor.instrument_app(app)
-            logger.info("otel_fastapi_instrumented")
-    except ImportError:
-        logger.info("otel_fastapi_instrumentation_absente")
+# FastAPI auto-instrumentation is deliberately NOT enabled.
+#
+# `opentelemetry-instrumentation-fastapi` < 0.65b0 crashes on FastAPI >= 0.141
+# with `'_IncludedRouter' object has no attribute 'path'`. The middleware runs
+# BEFORE the CORS one, so every request became a 500 with no CORS headers — the
+# browser reported it as a CORS failure, and the real cause was three layers
+# down.
+#
+# A compatibility probe (ADR-014) could not protect against this: the build
+# environment had the fixed 0.65b0, while pip backtracked to the broken 0.63b1
+# inside the container, constrained by google-adk's opentelemetry-api pin. The
+# probe tested a version that was never deployed.
+#
+# What is lost: automatic HTTP spans. What is kept: everything that carries the
+# product value — mission spans, trace_id correlation, the audit trail — all of
+# which are ACC's own code and depend on no optional package.
 
 
 @app.get("/")

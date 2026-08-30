@@ -64,11 +64,11 @@ class AlertingService:
         if (mission.status in {MissionStatus.AT_RISK, MissionStatus.RECOVERING}
                 or blocked_after_disruption):
             alerts.append(Alert("CRITICAL", "mission_at_risk", mid,
-                                f"Mission en risque : {mission.objective}",
-                                f"étape {mission.current_stage}"))
+                                f"Mission at risk: {mission.objective}",
+                                f"stage {mission.current_stage}"))
         if mission.status is MissionStatus.FAILED:
             alerts.append(Alert("CRITICAL", "mission_failed", mid,
-                                f"Mission échouée : {mission.objective}",
+                                f"Mission failed: {mission.objective}",
                                 mission.current_stage))
 
         # --- CRITICAL: security violation -----------------------------------
@@ -77,7 +77,7 @@ class AlertingService:
                               SecurityEventType.AUTHORIZATION_DENIED,
                               SecurityEventType.POLICY_DENIED}:
                 alerts.append(Alert("CRITICAL", "security_violation", mid,
-                                    f"Événement de sécurité : {event.type.value}",
+                                    f"Security event: {event.type.value}",
                                     event.detail))
 
         # --- CRITICAL: repeated failing recovery ----------------------------
@@ -85,7 +85,7 @@ class AlertingService:
         failed = [r for r in recoveries if r.status is RecoveryStatus.FAILED]
         if len(failed) >= 2:
             alerts.append(Alert("CRITICAL", "recovery_failing", mid,
-                                f"{len(failed)} recoveries en échec",
+                                f"{len(failed)} failed recoveries",
                                 "intervention humaine probablement requise"))
 
         # --- WARNING: approval dragging on ----------------------------------
@@ -93,13 +93,13 @@ class AlertingService:
             waiting = (utcnow() - approval.requested_at).total_seconds()
             if waiting > APPROVAL_DELAY_WARNING_S:
                 alerts.append(Alert("WARNING", "approval_delayed", mid,
-                                    f"Approbation en attente depuis {waiting / 60:.0f} min",
+                                    f"Approval pending for {waiting / 60:.0f} min",
                                     f"{approval.action} · {approval.approval_id}"))
 
         # --- WARNING: degraded agent ----------------------------------------
         for agent in await self.store.list_agents():
             if agent.status.value in {"DEGRADED", "FAILED", "SUSPENDED"}:
                 alerts.append(Alert("WARNING", "agent_degraded", None,
-                                    f"Agent {agent.agent_id} en état {agent.status.value}",
+                                    f"Agent {agent.agent_id} in state {agent.status.value}",
                                     agent.name))
         return alerts

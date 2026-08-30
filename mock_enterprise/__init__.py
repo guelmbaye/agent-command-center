@@ -1,1 +1,1 @@
-"""Systemes entreprise simules — deterministes et observables (Doc 07 §13)."""
+"""Simulated enterprise systems — deterministic and observable (Doc 07 §13)."""

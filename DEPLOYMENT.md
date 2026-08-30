@@ -80,7 +80,8 @@ used, so `make run` behaves identically on Windows, macOS and Linux.
 |---|---|
 | Interpreter | `make run PY=python3` if `python` is not on the PATH |
 | `npm` | Resolved via `shutil.which` — finds `npm.cmd` on Windows |
-| `costs.sh`, `teardown.sh`, `deploy.sh` | **Bash scripts**: run them from Git Bash or WSL |
+| Deployment scripts | All Python — `make deploy`, `make costs`, `make teardown` run natively in PowerShell |
+| Environment variables | `$env:PROJECT_ID = "..."` in PowerShell, not `export` |
 | Virtual environment | `dev.py` uses `sys.executable`, so the active venv is respected |
 | API key | `ACC_API_KEY` in the backend `.env` is enough — `make web` propagates it |
 
@@ -100,9 +101,33 @@ make run
 
 ## 3. Google Cloud — project setup
 
+> **Windows / PowerShell.** `export` is a bash command; PowerShell uses
+> `$env:`. Every deployment script is now Python, so **no bash is required** —
+> `make deploy`, `make costs` and `make teardown` work natively in PowerShell.
+
+**PowerShell**
+
+```powershell
+$env:PROJECT_ID      = "acc-hackathon-2026"   # must be globally unique
+$env:REGION          = "europe-west1"         # Belgium — see note below
+$env:BILLING_ACCOUNT = "0X0X0X-0X0X0X-0X0X0X"
+
+gcloud auth login
+gcloud projects create $env:PROJECT_ID
+gcloud billing projects link $env:PROJECT_ID --billing-account=$env:BILLING_ACCOUNT
+gcloud config set project $env:PROJECT_ID
+gcloud config set run/region $env:REGION
+
+# Application Default Credentials — REQUIRED, and separate from the CLI login
+gcloud auth application-default login
+gcloud auth application-default set-quota-project $env:PROJECT_ID
+```
+
+**bash / zsh**
+
 ```bash
-export PROJECT_ID="acc-hackathon-2026"     # must be globally unique
-export REGION="europe-west1"               # Belgium — see note below
+export PROJECT_ID="acc-hackathon-2026"
+export REGION="europe-west1"
 export BILLING_ACCOUNT="0X0X0X-0X0X0X-0X0X0X"
 
 gcloud auth login
@@ -110,6 +135,33 @@ gcloud projects create "${PROJECT_ID}"
 gcloud billing projects link "${PROJECT_ID}" --billing-account="${BILLING_ACCOUNT}"
 gcloud config set project "${PROJECT_ID}"
 gcloud config set run/region "${REGION}"
+
+# Application Default Credentials — REQUIRED, and separate from the CLI login
+gcloud auth application-default login
+gcloud auth application-default set-quota-project "${PROJECT_ID}"
+```
+
+> **`gcloud auth login` is not enough.** It authenticates the CLI. Terraform's
+> Google provider and the Vertex AI SDK both read **Application Default
+> Credentials**, a separate file. Without ADC, `terraform apply` fails — and it
+> fails *after* the images have been built and pushed, the most expensive
+> moment to discover a missing credential.
+>
+> `make deploy` therefore checks ADC **before** building anything, and stops on
+> a quota project mismatch. That mismatch is exactly what this warning means:
+>
+> ```
+> WARNING: Your active project does not match the quota project in your local
+> Application Default Credentials file.
+> ```
+>
+> It does not block Terraform, but it produces **403 PERMISSION_DENIED on
+> Vertex AI** — during the demo, after everything looked fine.
+
+You can also skip the variables entirely and pass the project explicitly:
+
+```
+python scripts/deploy.py --project-id acc-hackathon-2026 --region europe-west1
 ```
 
 ### Why `europe-west1`
@@ -248,6 +300,7 @@ gcloud services enable \
   secretmanager.googleapis.com \
   artifactregistry.googleapis.com \
   cloudbuild.googleapis.com \
+  compute.googleapis.com \
   cloudtrace.googleapis.com \
   logging.googleapis.com \
   monitoring.googleapis.com \
@@ -258,6 +311,59 @@ gcloud services enable \
 
 Allow 2–3 minutes for propagation. A `terraform apply` launched too early fails
 with `API not enabled` — just run it again.
+
+**Or let the deployment handle it.** It enables whatever is missing, waits for
+the service accounts to be provisioned, then continues:
+
+```
+make deploy ARGS=--enable-apis
+```
+
+Enabling an API is free and idempotent — only usage bills.
+
+> **Why `compute.googleapis.com` is in this list.** ACC runs no virtual
+> machine. But Cloud Build changed its default: on projects where the API was
+> enabled after that change, builds run as the **Compute Engine default service
+> account** — which only exists once the Compute API is enabled. Without it,
+> `gcloud builds submit` fails with:
+>
+> ```
+> PERMISSION_DENIED: Permission 'iam.serviceAccounts.get' denied on resource
+> (or it may not exist)
+> ```
+>
+> That reads like a permissions problem and is in fact a missing API.
+>
+> **And once the API is on, a second wall follows.** Recent projects no longer
+> grant Editor to default service accounts, so that account holds **no role at
+> all**. The next failure is:
+>
+> ```
+> 403: ...-compute@developer.gserviceaccount.com does not have
+> storage.objects.get access to the ..._cloudbuild bucket
+> ```
+>
+> Grant it the documented build role once:
+>
+> ```powershell
+> $env:NUMBER = gcloud projects describe $env:PROJECT_ID --format="value(projectNumber)"
+> gcloud projects add-iam-policy-binding $env:PROJECT_ID `
+>   --member="serviceAccount:$env:NUMBER-compute@developer.gserviceaccount.com" `
+>   --role="roles/cloudbuild.builds.builder"
+> ```
+>
+> `make deploy` checks **both** conditions before launching any build, and
+> reports every missing prerequisite at once rather than one per attempt.
+
+**PowerShell** — same list, one line:
+
+```powershell
+gcloud services enable run.googleapis.com firestore.googleapis.com `
+  pubsub.googleapis.com aiplatform.googleapis.com secretmanager.googleapis.com `
+  artifactregistry.googleapis.com cloudbuild.googleapis.com compute.googleapis.com `
+  cloudtrace.googleapis.com logging.googleapis.com monitoring.googleapis.com `
+  modelarmor.googleapis.com iam.googleapis.com --project=$env:PROJECT_ID
+```
 
 ---
 
@@ -406,48 +512,96 @@ Two protections:
 
 ## 9. Secrets
 
-No secret belongs in the repository, an image or a prompt.
+**Nothing to do.** Terraform generates the two secrets and their versions:
 
-```bash
-openssl rand -hex 32 | gcloud secrets create acc-api-key \
-  --data-file=- --project="${PROJECT_ID}"
+| Secret | Purpose |
+|---|---|
+| `acc-api-key` | Protects the public Cloud Run URL |
+| `acc-pubsub-push-token` | Authenticates Pub/Sub push |
 
-openssl rand -hex 32 | gcloud secrets create acc-pubsub-push-token \
-  --data-file=- --project="${PROJECT_ID}"
+Values are generated by `random_password`, stored in Secret Manager and mounted
+into Cloud Run at runtime. They never appear in the repository, in an image, in
+a prompt, or in a Terraform output.
+
+> **Why not manual.** An earlier version asked you to create them with
+> `openssl rand`. Terraform created only the secret *containers*, so a secret
+> with no version had no `latest` and every Cloud Run revision failed with
+> `Secret .../versions/latest was not found`. A manual prerequisite is a
+> prerequisite that gets skipped — and `openssl` is not in a default
+> PowerShell.
+
+To read the generated key back:
+
+```
+gcloud secrets versions access latest --secret=acc-api-key --project=$env:PROJECT_ID
 ```
 
-Terraform declares these secrets and mounts them as Cloud Run environment
-variables. The versions must exist **before** the apply, otherwise deployment
-fails with `Secret version not found`.
-
-To read the key back:
-
-```bash
-gcloud secrets versions access latest --secret=acc-api-key --project="${PROJECT_ID}"
-```
-
----
+`terraform output acc_api_key_command` prints that same command.
 
 ## 10. Deployment
 
-```bash
-PROJECT_ID="${PROJECT_ID}" REGION="${REGION}" ./scripts/deploy.sh
+Works identically on Windows, macOS and Linux — no bash required:
+
+```
+python scripts/deploy.py --project-id my-project
 ```
 
-The script builds the three images, pushes them to Artifact Registry, then
-applies Terraform. Creation order: APIs → Artifact Registry → Firestore → IAM →
-Secrets → Pub/Sub → Cloud Run.
+or, once `PROJECT_ID` is set in the environment:
 
-Dry run first:
-
-```bash
-cd infrastructure/terraform
-terraform init
-terraform plan \
-  -var="project_id=${PROJECT_ID}" -var="region=${REGION}" \
-  -var="image_api=placeholder" -var="image_mock=placeholder" \
-  -var="image_web=placeholder"
 ```
+make deploy
+```
+
+The script runs in this order:
+
+1. **Preflight** — credentials, APIs, build identity and its role
+2. **Artifact Registry** — a targeted `terraform apply` creates the repository
+   *before* anything is built, otherwise the push fails on
+   `name unknown: Repository "acc" not found`
+3. **Three images** — api, mock and web, built through Cloud Build under a
+   per-deployment tag (`:20260829-130452`). `:latest` alone would be the same
+   string every time, so Terraform would see no change and never roll out what
+   was just pushed
+4. **Full apply** — Firestore, IAM, secrets **and their versions**, Pub/Sub,
+   Cloud Run
+
+Terraform remains the single source of truth: the targeted apply in step 2 is a
+no-op when the full apply runs.
+
+Dry run first — no image is built:
+
+```
+make plan
+# or: python scripts/deploy.py --project-id my-project --plan-only
+```
+
+To reuse images already pushed:
+
+```
+python scripts/deploy.py --project-id my-project --skip-build
+```
+
+> **`--skip-build` does not rebuild Mission Control.** `NEXT_PUBLIC_ACC_API` is
+> inlined at build time, so skipping the build preserves whatever the previous
+> image was compiled with — including an empty value. If the frontend queries
+> its own origin, run a **full** `make deploy`. The script warns about this.
+
+If a previous apply failed halfway and left a service in a broken state:
+
+```
+make deploy ARGS="--repair --skip-build"
+```
+
+`--repair` handles the two ways a failed apply leaves a service stuck:
+
+- **Tainted** — Terraform wants to replace it, and the replacement is blocked
+  by `deletion_protection`. Untainting lets the next apply update it in place.
+- **Revision permanently dead** — a Cloud Run revision that failed to start
+  never retries, so updating in place keeps reporting the same broken revision.
+  The service is deleted and removed from state, and the next apply recreates
+  it against an environment that is now correct.
+
+Healthy services are left untouched.
 
 The Terraform was statically validated (23 resources, all cross-references
 resolve, cost guardrails present) but **never applied**.
@@ -461,7 +615,7 @@ resolve, cost guardrails present) but **never applied**.
 | `Permission denied` on IAM | IAM propagation | re-run the apply |
 | `Secret version not found` | secrets not created | do §9 first |
 | Pub/Sub push returns 403 | missing token | check `acc-pubsub-push-token` |
-| `terraform destroy` blocked | Firestore protection | `./scripts/teardown.sh` |
+| `terraform destroy` blocked | Firestore protection | `make teardown` |
 
 IAM propagation frequently makes the **first** apply fail and the second
 succeed. That is not a configuration error.
@@ -492,6 +646,16 @@ Then run the full scenario against the deployed instance:
 
 And open `${WEB_URL}` in a browser.
 
+**How to confirm the frontend is wired correctly.** Open the deployed Mission
+Control, then the browser network tab. Every call must go to
+`https://acc-api-...`. A call to `https://acc-web-.../api/v1/...` means the web
+image was built without the URL — run a full `make deploy`.
+
+> **On the first deployment, Mission Control derives the API URL from its own
+> origin** — `acc-web-…` becomes `acc-api-…`, since both services share the same
+> Cloud Run suffix. Running `make deploy` a second time bakes the real value in
+> as a build argument. Both paths work; the second is explicit.
+
 > **The one deliverable never observed.** Mission Control is strictly typed,
 > builds cleanly and is wired to the real API, but it was never seen rendered
 > from the build environment. Layout, projection contrast and live-stream
@@ -505,8 +669,9 @@ exactly that proof. See `docs/DEMO_SCRIPT.md`, segment 3:20.
 
 ## 12. Day-to-day cost tracking
 
-```bash
-PROJECT_ID="${PROJECT_ID}" ./scripts/costs.sh
+```
+make costs
+# or: python scripts/costs.py --project-id my-project
 ```
 
 It reports: budget and thresholds, scaling guardrails per service (and warns if
@@ -541,20 +706,26 @@ reports after roughly 24 hours of collection.
 - Switch back to `ACC_AGENT_MODE=deterministic` between rehearsals: zero tokens,
   governance still demonstrated
 - Never raise `min_instance_count` above 0, even to avoid cold starts
-- Run `./scripts/costs.sh` once a day
-- After submission: `./scripts/teardown.sh` the same day
+- Run `make costs` once a day
+- After submission: `make teardown` the same day
 
 ---
 
 ## 13. Teardown
 
-```bash
-PROJECT_ID="${PROJECT_ID}" ./scripts/teardown.sh
+```
+make teardown
+# or: python scripts/teardown.py --project-id my-project
 ```
 
 The script first lifts Firestore delete protection (without which
 `terraform destroy` fails), destroys the infrastructure, then lists what can
 still bill.
+
+Cloud Run services carry `deletion_protection = false` for the same reason:
+provider v6 protects them by default, which would have made this teardown
+impossible. Firestore keeps its protection — it holds mission state — and the
+script removes it explicitly, in that order.
 
 What **survives** a destroy: Artifact Registry images and retained logs. The
 script prints the commands to remove them.
@@ -656,16 +827,31 @@ automatically — nothing else to do.
 
 | Symptom | Lead |
 |---|---|
+| `WARNING: active project does not match the quota project` | `gcloud auth application-default set-quota-project <project>`. Harmless for Terraform, but Vertex AI answers 403 |
+| `could not find default credentials` on `terraform apply` | `gcloud auth application-default login` — the CLI login does not create ADC |
+| `iam.serviceAccounts.get denied (or it may not exist)` on `builds submit` | `compute.googleapis.com` not enabled: the Cloud Build default identity does not exist. Enable it, wait 2 min, retry |
+| `storage.objects.get denied` on the `_cloudbuild` bucket | The build service account holds no role. Grant `roles/cloudbuild.builds.builder` (§5) |
+| `name unknown: Repository "acc" not found` on push | The registry did not exist at build time. `make deploy` now creates it first — re-run it |
+| `Secret .../versions/latest was not found` | Terraform now generates the secret versions. Re-run `make deploy` |
+| `Revision '...' is not ready` **after** the secrets exist | The revision predates the secrets and never retries. `make deploy ARGS="--repair --skip-build"` |
+| `cannot destroy service without setting deletion_protection=false` **and it persists after re-running** | A failed apply left the service tainted: Terraform wants to replace it, the replacement is blocked, and the unblocking flag can only be applied by that same apply. Break the deadlock: `make deploy ARGS=--repair` |
+| Missions stay in `EXECUTING` / `planning` with no agent activity | Pub/Sub push was rejected: the token must travel in the push URL query string, not a header (ADR-055). Re-run `make deploy` |
+| Missions stay in `CREATED` once deployed | Pub/Sub push cannot mint its OIDC token. Terraform now grants `roles/iam.serviceAccountTokenCreator` to the Pub/Sub service agent — re-run `make deploy` if you deployed before that fix |
 | `/healthz` says `persistence: memory` in production | `ACC_PERSISTENCE` not passed — check Cloud Run env vars |
 | Missions stuck in `CREATED` | Pub/Sub push not arriving: check the subscription and OIDC token |
 | Model Armor blocks nothing | Template not found → silent fallback to the heuristic. Check `MODEL_ARMOR_TEMPLATE` and `roles/modelarmor.user` |
 | Agents permanently on deterministic fallback | Look for `adk_unavailable` / `agent_model_error` logs — usually a quota or a model missing from the region |
 | `FAILED_PRECONDITION` on approvals | Firestore index still building (a few minutes) |
 | Frontend shows nothing | `NEXT_PUBLIC_ACC_API` is frozen **at build time**: rebuild after changing the URL |
+| Mission Control queries **its own origin** (`acc-web-.../api/v1/...` → 404) | The web image was built with an empty build argument. Re-run `make deploy`: the API URL is known now and gets baked in |
+| Images pushed but the app does not change; apply says **"0 to add, N to change"** with only a `scaling` diff | The images carried `:latest`, so Terraform saw no change. Fixed by a per-deployment tag — re-run `make deploy` |
+| Cloud Run answers **404 with an HTML page** on the FIRST call, then 200 | Cold start: the instance was scaled to zero. The diagnostic now retries; nothing to fix |
+| Cloud Run answers 404 **after three retries** | The request really is not reaching the container. Compare `terraform output -raw acc_api_url` with `gcloud run services describe acc-api --region=REGION --format='value(status.url)'`, and read `status.conditions` |
 | SSE never connects | Normal behind some proxies — the hook falls back to polling on its own |
 | CORS error from Mission Control | Almost always another server on the port: `curl` ignores CORS, browsers do not. `make doctor` tests the preflight |
-| CORS blocked once deployed | `ACC_CORS_ORIGIN_REGEX` must cover your Cloud Run URL — wildcards in `ACC_CORS_ORIGINS` do not work |
-| `AttributeError: '_IncludedRouter'` on every request | OTel instrumentation too old for FastAPI ≥ 0.141. ACC disables it by itself; to re-enable: `pip install -U opentelemetry-instrumentation-fastapi` |
+| CORS blocked once deployed | Run `python scripts/doctor.py --api <url>`: it now reproduces the browser preflight. If it reports **HTTP 404 with `Server: Google Frontend`**, the OPTIONS request never reached the container — the problem is at the Cloud Run edge, not in the app. Confirm with `gcloud run services logs read acc-api --region=REGION --limit=20`: no OPTIONS line means the request stopped before the container |
+| `AttributeError: '_IncludedRouter'` on every request | FastAPI auto-instrumentation, removed in ADR-052. It crashed **before** the CORS middleware, so the browser reported a CORS failure. Re-deploy from a current archive |
+| `Tool failure suppliers: HTTP 404` once deployed | The enterprise mock had internal-only ingress and the client sent no identity token (ADR-057). Re-run `make deploy` |
 | All missions go straight to recovery | The enterprise systems are not running: `make run-mock` in a second terminal |
 
 ### Reading the logs
@@ -706,12 +892,13 @@ demo video.
 
 | # | Action | Time | Why it is risky |
 |---|---|---|---|
-| 0 | Check `gemini-3.6-flash` answers (§7) | 2 min | A model missing from the region blocks everything |
+| 0a | `gcloud auth application-default login` + `set-quota-project` (§3) | 2 min | Terraform and Vertex read ADC, not the CLI login |
+| 0b | Check `gemini-3.6-flash` answers (§7) | 2 min | A model missing from the region blocks everything |
 | 1 | 40 $ budget (§4) | 5 min | No safety net without it |
-| 2 | `terraform apply` (§10) | 30 min | Never executed — Firestore and IAM traps |
+| 2 | `make plan` then `make deploy` (§10) | 30 min | Never executed — Firestore and IAM traps |
 | 3 | Real Gemini in `hybrid` (§7) | 10 min | The only path never tested against a model |
 | 4 | `make stack` | 15 min | Docker images never built |
 | 5 | Open Mission Control (§11) | 5 min | Never seen rendered |
 | 6 | 4-minute video with Cloud Run proof | 2 h | Mandatory submission asset |
 | 7 | 10 consecutive runs | 30 min | Blueprint reliability target |
-| 8 | `./scripts/teardown.sh` | 5 min | On submission day |
+| 8 | `make teardown` | 5 min | On submission day |

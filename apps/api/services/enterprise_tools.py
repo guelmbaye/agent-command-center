@@ -42,6 +42,36 @@ class EnterpriseToolClient:
         self._client: httpx.AsyncClient | None = None
         self._consecutive_failures: dict[str, int] = {}
         self._breaker_threshold = 3
+        self._identity_token: str | None = None
+
+    def _fetch_identity_token(self) -> str | None:
+        """Prove who we are to another Cloud Run service.
+
+        The enterprise systems only accept `acc-api` (roles/run.invoker), and
+        Cloud Run checks that through an OIDC identity token — not through the
+        application API key. Without it the call is refused before reaching the
+        container.
+
+        Returns None outside Google Cloud, where there is no metadata server
+        and no restriction to satisfy.
+        """
+        if self._identity_token is not None:
+            return self._identity_token
+        try:
+            import google.auth.transport.requests
+            import google.oauth2.id_token
+
+            audience = self.settings.acc_enterprise_base_url
+            request = google.auth.transport.requests.Request()
+            self._identity_token = google.oauth2.id_token.fetch_id_token(
+                request, audience)
+            logger.info("enterprise_identity_token_acquired",
+                        extra={"audience": audience})
+        except Exception as exc:  # local run, or no metadata server
+            logger.info("enterprise_identity_token_unavailable",
+                        extra={"detail": str(exc)[:120]})
+            self._identity_token = ""
+        return self._identity_token or None
 
     async def _http(self) -> httpx.AsyncClient:
         if self._client is None:
@@ -51,6 +81,10 @@ class EnterpriseToolClient:
             }
             if self._transport is not None:
                 kwargs["transport"] = self._transport
+            elif self.settings.acc_enterprise_base_url.startswith("https://"):
+                token = self._fetch_identity_token()
+                if token:
+                    kwargs["headers"] = {"Authorization": f"Bearer {token}"}
             self._client = httpx.AsyncClient(**kwargs)
         return self._client
 
@@ -70,7 +104,7 @@ class EnterpriseToolClient:
             return ToolCallResult(
                 ok=False, data={}, status_code=0,
                 failure_class=FailureClass.DEPENDENCY,
-                error=f"Circuit ouvert sur {tool} apres echecs repetes",
+                error=f"Circuit open on {tool} after repeated failures",
             )
         with span(Span.TOOL_CALL, tool=tool, path=path):
             try:

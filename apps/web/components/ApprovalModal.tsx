@@ -15,18 +15,26 @@ import type { Approval } from "@/lib/types";
 export function ApprovalModal({
   approval,
   onDecided,
+  onDismiss,
 }: {
   approval: Approval;
   onDecided: () => void;
+  /** Close WITHOUT deciding.
+   *
+   *  ACC's own claim is that an approval is durable state, not a UI session.
+   *  A modal with no exit contradicted it: the operator could not open the
+   *  Recovery tab to read the evidence, nor reach the demo controls, without
+   *  first approving or rejecting — deciding before inspecting.
+   */
+  onDismiss: () => void;
 }) {
   const [busy, setBusy] = useState<"approve" | "reject" | null>(null);
   const [comment, setComment] = useState("");
   const [error, setError] = useState<string | null>(null);
 
-  // Une décision en fait souvent naître une autre : le modal reste monté, avec
-  // une NOUVELLE approbation. Sans cette remise à zéro, il conservait l'état
-  // « en cours » de la décision précédente — boutons désactivés, « … » figé —
-  // et l'opérateur ne pouvait plus rien décider.
+  // One decision often creates another: the modal stays mounted with a NEW
+  // approval. Without this reset it kept the previous decision's "busy" state
+  // — buttons disabled, a frozen "…" — and nothing could be decided again.
   useEffect(() => {
     setBusy(null);
     setComment("");
@@ -42,7 +50,7 @@ export function ApprovalModal({
     } catch (err) {
       setError(err instanceof Error ? err.message : "Decision refused");
     } finally {
-      // Toujours relâcher : sur succès comme sur échec.
+      // Always release: on success as on failure.
       setBusy(null);
     }
   }
@@ -56,6 +64,16 @@ export function ApprovalModal({
           </h2>
           <span className="font-mono text-[10px] text-ink-dim">
             {approval.approval_id}
+            <button
+              type="button"
+              onClick={onDismiss}
+              disabled={busy !== null}
+              className="ml-3 rounded border border-line px-2 py-0.5 text-[10px]
+                         uppercase tracking-wide text-ink-dim
+                         hover:text-ink disabled:opacity-40"
+            >
+              Decide later
+            </button>
           </span>
         </header>
 
@@ -73,7 +91,7 @@ export function ApprovalModal({
 
           <div>
             <p className="font-mono text-[10px] uppercase tracking-[0.15em] text-ink-dim">
-              Motif
+              Reason
             </p>
             <p className="mt-1 text-sm text-ink-muted">{approval.reason}</p>
           </div>

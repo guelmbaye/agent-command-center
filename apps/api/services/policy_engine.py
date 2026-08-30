@@ -197,10 +197,16 @@ class PolicyEngine:
             # Amounts are formatted by the frontend (operator locale): the
             # backend exposes raw values, not localised strings.
             "approval_required": [
-                "purchase.execute au-dela du seuil autonome",
-                "recovery.apply (risque HIGH/CRITICAL)",
+                "purchase.execute above the autonomous threshold",
+                "recovery.apply (HIGH/CRITICAL risk)",
             ],
             "blocked": sorted(FORBIDDEN_CAPABILITIES),
+            # The agent mode the fleet is ACTUALLY running. The UI used to
+            # print "deterministic" as a literal string, so a deployment in
+            # `hybrid` displayed the wrong mode — and an operator read a
+            # two-minute run as a performance problem rather than as evidence
+            # that a model was being called.
+            "agent_mode": self.settings.acc_agent_mode,
             "thresholds": {
                 "purchase_autonomous_max": self.settings.policy_purchase_autonomous_max,
                 "purchase_approval_max": self.settings.policy_purchase_approval_max,

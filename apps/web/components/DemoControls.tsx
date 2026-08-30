@@ -4,7 +4,7 @@ import { useState } from "react";
 import { api } from "@/lib/api";
 
 /**
- * Demo controls deterministic.
+ * Demo controls, deterministic and operator-triggered.
  *
  * Le jury ne dépend jamais d'une panne aléatoire : chaque moment de la démo
  * est déclenché explicitement (Doc 06 §21).
@@ -12,15 +12,24 @@ import { api } from "@/lib/api";
 export function DemoControls({
   missionId,
   missionStatus,
+  agentMode,
   onChange,
 }: {
   missionId: string | null;
   missionStatus?: string | null;
+  /** Read from the control plane. A literal here once claimed "deterministic"
+   *  on a fleet running `hybrid`, and a two-minute run looked like a
+   *  performance problem instead of evidence that a model was answering. */
+  agentMode?: string;
   onChange: () => void;
 }) {
-  // Sur une mission terminee, interrompre et reprendre n'ont plus de sens :
-  // le backend les refuse. Laisser les boutons actifs produirait une erreur
-  // en pleine demonstration.
+  // Interrupt and resume need a LIVE mission: with none selected, or once the
+  // mission has settled, the backend refuses them. Leaving the buttons active
+  // would produce an error mid-demonstration.
+  //
+  // Reset, failure injection and hostile injection act on the enterprise
+  // systems and on stored state, so they stay available with no mission — the
+  // documented order arms the failure BEFORE launching.
   const settled = missionStatus
     ? ["COMPLETED", "FAILED", "ABORTED"].includes(missionStatus)
     : false;
@@ -102,7 +111,7 @@ export function DemoControls({
     <section className="panel">
       <header className="panel-header">
         <h2 className="panel-title">Demo controls</h2>
-        <span className="font-mono text-[10px] text-ink-dim">deterministic</span>
+        <span className="font-mono text-[10px] text-ink-dim">{agentMode ?? "…"}</span>
       </header>
       <div className="space-y-1.5 p-4">
         {actions.map((action) => (
@@ -126,7 +135,9 @@ export function DemoControls({
         ))}
         {settled && (
           <p className="pt-1 text-center font-mono text-[10px] text-ink-dim">
-            Mission finished: nothing left to interrupt or resume.
+            {missionId
+            ? "Mission finished: nothing left to interrupt or resume."
+            : "Arm a failure, then launch a mission. Interrupt and resume need a running one."}
           </p>
         )}
         {note && (

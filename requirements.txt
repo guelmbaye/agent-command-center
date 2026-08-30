@@ -22,7 +22,9 @@ opentelemetry-sdk>=1.28
 # Optionnel : les spans HTTP automatiques. Les versions anterieures a
 # 0.58b0 sont incompatibles avec FastAPI >= 0.141 (objets _IncludedRouter).
 # ACC sonde la compatibilite au demarrage et se degrade proprement.
-opentelemetry-instrumentation-fastapi>=0.58b0
+# opentelemetry-instrumentation-fastapi: removed on purpose (ADR-052).
+# Versions below 0.65b0 crash on FastAPI >= 0.141 and pip backtracks to
+# them inside the container, constrained by google-adk.
 opentelemetry-exporter-otlp-proto-grpc>=1.28
 opentelemetry-exporter-gcp-trace>=1.7.0
 

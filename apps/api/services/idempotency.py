@@ -15,7 +15,35 @@ logger = get_logger("acc.idempotency")
 
 
 def build_key(mission_id: str, task_id: str | None, action: str) -> str:
+    """Key for an observation, scoped to the task that made it."""
     return f"{mission_id}-{task_id or 'no-task'}-{action}"
+
+
+def build_action_key(mission_id: str, action: str,
+                     parameters: dict[str, Any] | None = None) -> str:
+    """Key for a CONSEQUENTIAL action, scoped to the MISSION.
+
+    The task id must not appear here. A mission is decomposed into a planning
+    task and an execution task; with the task in the key, the same purchase
+    made from both produced two different keys and two real purchase orders:
+
+        19:32:51  Purchase order PO-8831 ... $4800.00
+        19:33:00  Purchase order PO-8832 ... $4800.00
+
+    Deterministic mode hid it — only the execution task purchases there. A
+    model choosing its own tools bought during planning as well.
+
+    The business parameters ARE part of the identity: buying 1200 units from
+    SUP-B after a recovery is a different action from buying them from SUP-A,
+    and must not be deduplicated away. What must be deduplicated is the same
+    action, whichever task attempts it.
+    """
+    parts = [mission_id, action]
+    for field in ("supplier_id", "units", "amount"):
+        value = (parameters or {}).get(field)
+        if value is not None:
+            parts.append(f"{field}={value}")
+    return "-".join(parts)
 
 
 class IdempotencyGuard:

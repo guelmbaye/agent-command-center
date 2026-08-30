@@ -4,12 +4,43 @@ import type {
   PolicyBoundary, RecoveryAttempt, TimelineEvent, TraceNode,
 } from "./types";
 
-// 127.0.0.1 plutôt que "localhost" : sous Windows, "localhost" résout d'abord
-// en IPv6 (::1). Uvicorn n'écoute qu'en IPv4, donc un autre service lié à
-// [::1]:8080 (Apache/XAMPP, IIS, un proxy) intercepte silencieusement les
-// appels et renvoie ses propres 404.
-export const API_BASE =
-  process.env.NEXT_PUBLIC_ACC_API ?? "http://127.0.0.1:8080";
+// 127.0.0.1 rather than "localhost": on Windows, "localhost" resolves to IPv6
+// (::1) first. Uvicorn listens on IPv4 only, so another service bound to
+// [::1]:8080 (Apache/XAMPP, IIS, a proxy) silently intercepts the calls and
+// answers with its own 404s.
+const LOCAL_FALLBACK = "http://127.0.0.1:8080";
+
+/**
+ * Resolve the control plane URL.
+ *
+ * `NEXT_PUBLIC_*` is frozen AT BUILD TIME. On Cloud Run the API URL only
+ * exists after `terraform apply`, so the very first image is necessarily built
+ * without it — passing it as a runtime environment variable has no effect,
+ * because the value was already inlined into the bundle.
+ *
+ * Both services share the same Cloud Run URL suffix within a project and
+ * region, so the control plane can be derived from the page's own origin.
+ * A later deployment bakes the real value in (deploy.py passes it as a build
+ * argument once it is known) and this derivation is then never used.
+ */
+function resolveApiBase(): string {
+  const baked = process.env.NEXT_PUBLIC_ACC_API;
+
+  // `if (baked)`, never `baked ?? fallback`. The Dockerfile does
+  // `ENV NEXT_PUBLIC_ACC_API=${ARG}`, so with no --build-arg the value is the
+  // EMPTY STRING, not undefined. `??` only catches null and undefined, so an
+  // empty string won, every call became relative, and the deployed Mission
+  // Control queried its own origin — answering 404 for /api/v1/*.
+  if (baked) return baked;
+
+  if (typeof window !== "undefined") {
+    const origin = window.location.origin;
+    if (origin.includes("acc-web")) return origin.replace("acc-web", "acc-api");
+  }
+  return LOCAL_FALLBACK;
+}
+
+export const API_BASE = resolveApiBase();
 
 const API_KEY = process.env.NEXT_PUBLIC_ACC_API_KEY ?? "";
 
@@ -136,5 +167,14 @@ export const api = {
   },
 };
 
-export const streamUrl = (missionId: string) =>
-  `${API_BASE}/api/v1/missions/${missionId}/stream`;
+/**
+ * SSE stream URL.
+ *
+ * The key goes in the query string because `EventSource` CANNOT set request
+ * headers — there is no API for it. Without this the stream answered 401 and
+ * the UI fell back to polling, losing the live timeline that carries the demo.
+ */
+export const streamUrl = (missionId: string) => {
+  const base = `${API_BASE}/api/v1/missions/${missionId}/stream`;
+  return API_KEY ? `${base}?api_key=${encodeURIComponent(API_KEY)}` : base;
+};

@@ -104,6 +104,18 @@ def test_readme_contains_spin_up_instructions():
 # ---------------------------------------------------------------------------
 ACCENTS = "éèêëàâçùûôîïœ"
 
+# Accent-free French slips through an accent check. `"Cle d'API invalide ou
+# absente"` reached production that way: no accent, and its file was not in the
+# list below. Both gaps are closed.
+FRENCH_PHRASES = (
+    "cle d'api", "invalide ou absente", "introuvable", "echec", "aucune",
+    "impossible de", "n'est pas", "veuillez", "erreur", "interdit",
+    "requete", "prete", "reinitialis", "demarrer", "panne", "systemes",
+    "selectionne", "diagnostique", "menace", "etat acc",
+    "tentative", "injonction", "neutralisation", "contournement",
+    "exfiltration", "redefinition", "consequente", "contexte", "injecte",
+)
+
 USER_FACING_BACKEND = [
     ROOT / "apps/api/services/mission_engine.py",
     ROOT / "apps/api/services/recovery_engine.py",
@@ -115,11 +127,42 @@ USER_FACING_BACKEND = [
     ROOT / "domain/plans.py",
     ROOT / "apps/api/main.py",
     ROOT / "apps/api/core/config.py",
+    ROOT / "apps/api/routes/deps.py",
+    ROOT / "apps/api/routes/missions.py",
+    ROOT / "apps/api/routes/demo.py",
+    ROOT / "apps/api/core/errors.py",
+    ROOT / "domain/errors.py",
+    ROOT / "apps/api/routes/health.py",
+    ROOT / "apps/api/routes/approvals.py",
+    ROOT / "apps/api/routes/agents.py",
+    ROOT / "apps/api/routes/events.py",
+    ROOT / "apps/api/routes/metrics.py",
+    ROOT / "mock_enterprise/main.py",
+    ROOT / "apps/api/services/model_armor.py",
+    ROOT / "apps/api/services/alerting.py",
+    ROOT / "apps/api/services/enterprise_tools.py",
+    ROOT / "agents/base.py",
+    ROOT / "agents/runtime.py",
+    ROOT / "domain/state_machine.py",
     ROOT / "agents/supply/agent.py",
     ROOT / "agents/risk/agent.py",
     ROOT / "agents/procurement/agent.py",
     ROOT / "agents/failure_twin/agent.py",
 ]
+
+
+def _has_french_phrase(line: str) -> bool:
+    """Match whole words only.
+
+    Substring matching flagged `logger.warning("demo_supplier_failure_injected")`
+    on the French "injecte". A detector that cries wolf is a detector the next
+    reader disables.
+    """
+    lowered = line.lower()
+    return any(
+        re.search(rf"(?<![a-z]){re.escape(phrase)}(?![a-z])", lowered)
+        for phrase in FRENCH_PHRASES
+    )
 
 
 def _code_only(text: str) -> list[tuple[int, str]]:
@@ -150,10 +193,11 @@ def _code_only(text: str) -> list[tuple[int, str]]:
 @pytest.mark.parametrize("path", USER_FACING_BACKEND, ids=lambda p: p.name)
 def test_backend_user_facing_strings_are_english(path):
     offenders = [
-        (n, l.strip()[:80]) for n, l in _code_only(path.read_text(encoding="utf-8"))
-        if any(a in l for a in ACCENTS)
+        (number, line.strip()[:80])
+        for number, line in _code_only(path.read_text(encoding="utf-8"))
+        if any(a in line for a in ACCENTS) or _has_french_phrase(line)
     ]
-    assert not offenders, f"{path.name} : texte non anglais {offenders[:3]}"
+    assert not offenders, f"{path.name}: non-English text {offenders[:3]}"
 
 
 def test_ui_strings_are_english():
@@ -206,8 +250,10 @@ def test_readme_states_the_mandatory_stack():
 
 
 def test_readme_points_to_the_architecture_diagram():
+    """The rendered file is what a judge opens; the source is for maintainers."""
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    assert "docs/diagrams/architecture.mmd" in readme
+    assert "docs/diagrams/architecture.png" in readme
+    assert "architecture.mmd" in readme, "keep the maintained source visible"
 
 
 def test_no_dangling_reference_to_the_renamed_guide():
@@ -290,3 +336,38 @@ def test_source_comments_are_in_english(directory):
     assert not offenders, (
         f"{len(offenders)} non-English line(s): " + "; ".join(offenders[:4])
     )
+
+
+def test_the_architecture_diagram_is_an_uploadable_file():
+    """Devpost requires the diagram UPLOADED: pdf/ppt/pptx/png/jpg — not .mmd."""
+    diagrams = ROOT / "docs" / "diagrams"
+    rendered = [p for p in diagrams.iterdir()
+                if p.suffix.lower() in {".png", ".jpg", ".jpeg", ".pdf"}]
+    assert rendered, (
+        "only Mermaid sources are present; the submission form cannot take them"
+    )
+    assert any(p.stat().st_size > 20_000 for p in rendered), "diagram looks empty"
+
+
+def test_the_submission_sheet_declares_a_compliant_model():
+    """The form asks for the model, and Stage One checks it."""
+    submission = (ROOT / "docs" / "SUBMISSION.md").read_text(encoding="utf-8")
+    model = make_settings().gemini_model
+    assert model in submission, (
+        f"the submission sheet must name the model actually deployed ({model})"
+    )
+    assert "Fortified Enterprise Fleet" in submission
+    assert "Google ADK" in submission
+
+
+def test_the_submission_sheet_respects_the_field_limits():
+    import re as _re
+
+    text = (ROOT / "docs" / "SUBMISSION.md").read_text(encoding="utf-8")
+    name = _re.search(r"## Project name.*?```\n(.*?)\n```", text, _re.S).group(1)
+    pitch = _re.search(r"## Elevator pitch.*?```\n(.*?)\n```", text, _re.S).group(1)
+    tags = _re.search(r"## Built with.*?```\n(.*?)\n```", text, _re.S).group(1)
+
+    assert len(name) <= 60, f"project name is {len(name)} characters"
+    assert len(pitch) <= 200, f"elevator pitch is {len(pitch)} characters"
+    assert len([t for t in _re.split(r"[,\s]+", tags) if t]) <= 25

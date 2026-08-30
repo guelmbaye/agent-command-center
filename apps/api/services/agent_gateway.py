@@ -28,7 +28,11 @@ from apps.api.services.enterprise_tools import (
     is_consequential,
     resolve,
 )
-from apps.api.services.idempotency import IdempotencyGuard, build_key
+from apps.api.services.idempotency import (
+    IdempotencyGuard,
+    build_action_key,
+    build_key,
+)
 from apps.api.services.model_armor import ModelArmor
 from apps.api.services.policy_engine import PolicyEngine, PolicyRequest
 from apps.api.services.registry import AgentRegistry
@@ -85,9 +89,16 @@ class AgentGateway:
 
     async def execute(self, request: GatewayRequest) -> ToolActionResult:
         identity = request.identity
-        key = request.idempotency_key or build_key(
-            identity.mission_id, identity.task_id, request.capability
-        )
+        # A consequential action is identified by the MISSION and by what it
+        # does — never by the task that happens to attempt it (ADR-061).
+        if is_consequential(request.capability):
+            key = request.idempotency_key or build_action_key(
+                identity.mission_id, request.capability, request.parameters
+            )
+        else:
+            key = request.idempotency_key or build_key(
+                identity.mission_id, identity.task_id, request.capability
+            )
         action = ToolAction(
             mission_id=identity.mission_id,
             task_id=identity.task_id,

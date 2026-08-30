@@ -22,8 +22,11 @@ FLEET_SEED: list[AgentRecord] = [
         version="1.0.0",
         status=AgentStatus.APPROVED,
         risk_level=RiskLevel.LOW,
-        capabilities=["supplier.read", "supplier.status", "supplier.capacity",
-                      "supplier.alternatives"],
+        # Exactly what its tools can invoke. A capability that matches no tool
+        # is dead weight; a tool without its capability is a CAPABILITY_DENIED
+        # the operator has to decipher.
+        capabilities=["supplier.status", "supplier.alternatives",
+                      "production.read"],
         allowed_tools=["suppliers", "production"],
         denied_capabilities=["purchase.execute", "employee.read", "payroll.write",
                              "customer.export"],
@@ -37,7 +40,7 @@ FLEET_SEED: list[AgentRecord] = [
         version="1.0.0",
         status=AgentStatus.APPROVED,
         risk_level=RiskLevel.MEDIUM,
-        capabilities=["risk.assess", "risk.compare", "risk.recommend", "supplier.read"],
+        capabilities=["risk.assess", "supplier.status", "production.read"],
         allowed_tools=["risk", "suppliers"],
         denied_capabilities=["purchase.execute", "employee.read", "payroll.write",
                              "customer.export"],
@@ -51,8 +54,8 @@ FLEET_SEED: list[AgentRecord] = [
         version="1.0.0",
         status=AgentStatus.APPROVED,
         risk_level=RiskLevel.HIGH,
-        capabilities=["supplier.compare", "supplier.read", "supplier.status",
-                      "purchase.recommend", "purchase.execute"],
+        capabilities=["supplier.status", "supplier.alternatives",
+                      "purchase.execute"],
         allowed_tools=["suppliers", "procurement"],
         denied_capabilities=["employee.read", "payroll.write", "customer.export"],
         authority_level=AuthorityLevel.SUPERVISED,
@@ -66,8 +69,8 @@ FLEET_SEED: list[AgentRecord] = [
         status=AgentStatus.APPROVED,
         risk_level=RiskLevel.MEDIUM,
         capabilities=["recovery.diagnose", "recovery.plan", "recovery.apply",
-                      "recovery.abort", "supplier.read", "supplier.alternatives",
-                      "risk.assess"],
+                      "recovery.abort", "supplier.status",
+                      "supplier.alternatives", "production.read", "risk.assess"],
         allowed_tools=["suppliers", "risk", "production"],
         denied_capabilities=["purchase.execute", "employee.read", "payroll.write",
                              "customer.export"],
@@ -82,8 +85,28 @@ class AgentRegistry:
     def __init__(self, store: Store) -> None:
         self.store = store
 
+    # Fields the code owns. Anything else is operational state that belongs to
+    # the running fleet and must survive a redeployment.
+    DECLARED_FIELDS = ("capabilities", "denied_capabilities", "authority_level",
+                       "risk_level", "version", "name", "description")
+
     async def bootstrap(self) -> list[AgentRecord]:
-        """Register the fleet at startup (idempotent)."""
+        """Register the fleet at startup, and RECONCILE what the code declares.
+
+        This used to return the stored record untouched when an agent already
+        existed. The registry lives in Firestore, so a deployment could never
+        correct an agent's capabilities: fixing them in code changed nothing,
+        and the deployed fleet kept answering CAPABILITY_DENIED for a capability
+        the source had granted.
+
+        In a project whose whole argument is that the registry governs
+        authority, a registry no deployment can update is the wrong kind of
+        durable.
+
+        Operational state — status, current execution — is NOT overwritten: a
+        suspended agent stays suspended across a redeploy, which is exactly
+        what fleet governance means (Doc 02 §22).
+        """
         registered: list[AgentRecord] = []
         for seed in FLEET_SEED:
             existing = await self.store.get_agent(seed.agent_id)
@@ -91,8 +114,25 @@ class AgentRegistry:
                 record = seed.model_copy(deep=True)
                 record.status = AgentStatus.AVAILABLE
                 registered.append(await self.store.save_agent(record))
-            else:
+                continue
+
+            changed = {
+                field: getattr(seed, field)
+                for field in self.DECLARED_FIELDS
+                if getattr(existing, field) != getattr(seed, field)
+            }
+            if not changed:
                 registered.append(existing)
+                continue
+
+            for field, value in changed.items():
+                setattr(existing, field, value)
+            logger.info("agent_declaration_reconciled", extra={
+                "agent_id": seed.agent_id,
+                "fields": sorted(changed),
+            })
+            registered.append(await self.store.save_agent(existing))
+
         logger.info("fleet_registered", extra={"count": len(registered)})
         return registered
 

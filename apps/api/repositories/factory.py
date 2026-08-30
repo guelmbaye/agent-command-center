@@ -20,7 +20,9 @@ def get_store(settings: Settings | None = None) -> Store:
     if settings.acc_persistence == "firestore":
         try:
             from apps.api.repositories.firestore_store import FirestoreStore
-            _store = FirestoreStore(settings.google_cloud_project, settings.firestore_database)
+            _store = FirestoreStore(settings.google_cloud_project,
+                                    settings.firestore_database,
+                                    demo_mode=settings.acc_demo_mode)
             logger.info("store_selected", extra={"backend": "firestore"})
             return _store
         except Exception as exc:  # pragma: no cover - degrade proprement

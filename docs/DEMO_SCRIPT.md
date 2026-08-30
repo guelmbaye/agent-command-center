@@ -64,6 +64,13 @@ Only then: **New mission** → the form opens → keep the defaults
 Three safety nets: live execution, `ACC_AGENT_MODE=deterministic` (no model
 calls at all), and the recorded fallback.
 
+> **Record in `deterministic` mode.** Each Gemini call takes 10–20 s, so a
+> `hybrid` run stretches the hero scenario past two minutes — most of a
+> four-minute video spent watching spinners. Deterministic mode executes the
+> same governance through the same Gateway, in under a second. Use `hybrid`
+> when you want to show the model reasoning, not when the clock is the
+> constraint.
+
 Have a second browser tab already open on the **Google Cloud Run dashboard** —
 you will need it at 3:20 without fumbling.
 
@@ -109,7 +116,17 @@ fault, not the agent.
 
 ## 0:50 — 1:45 · The moment that sells the product
 
-Open the **Recovery** tab.
+**The approval modal is already up.** In deterministic mode the whole chain —
+failure, recovery, purchase plan — completes in under a second, so the request
+for human authority arrives before you have said a word. That is the product
+working, not a timing problem.
+
+Click **Decide later** in the modal header. The approval stays pending in the
+control plane; only the window closes, and a banner keeps it one click away.
+Deciding before reading the evidence would be exactly the habit ACC exists to
+prevent.
+
+Now open the **Recovery** tab.
 
 **Five options evaluated, two ruled out:**
 
@@ -135,7 +152,8 @@ POL-xxx*.
 
 ## 1:45 — 2:15 · The authority boundary
 
-The approval modal appears: **18 000 $**.
+Click the banner — **APR-8801 awaiting your decision** — to bring the modal
+back: **18 000 $**.
 
 > "The fallback costs 18 000 $. The autonomy threshold is 5 000. The mission
 > stops by itself and asks a human. This is not decorative caution: the form
@@ -157,7 +175,18 @@ three lines:
 
 ## 2:15 — 2:45 · The durability proof
 
-Click **Kill the runtime**, then **Resume**.
+**Do this while the mission is WAITING_APPROVAL, with the modal dismissed.**
+
+"Kill the runtime" and "Resume" require a mission that is still running. On a
+`COMPLETED`, `FAILED` or `ABORTED` mission they are disabled on purpose: ACC
+refuses to record an interruption that never happened (ADR-031). And the modal
+is an overlay — dismiss it with **Decide later** before reaching the controls.
+
+Waiting for approval is the strongest moment for this proof: the state that
+must survive is a *pending human decision*, not just a checkpoint.
+
+Click **Kill the runtime**, then **Resume**. The banner is still there
+afterwards: the approval survived the runtime.
 
 > "The runtime disappears. Mission state lives outside the process — in memory
 > here, in Firestore once deployed. On resume: context is restored, the
@@ -194,12 +223,21 @@ Metrics bar — the exact interface labels:
 
 **Required by the rules.** Switch to the second tab and show, in this order:
 
-1. **Cloud Run dashboard** — the three services `acc-api`, `acc-web`,
-   `acc-mock-enterprise`, green, with their revisions
-2. The **`.run.app` URL** in the address bar of the running Mission Control
-3. *(if time allows)* **Cloud Logging**, filtered on
+1. **Cloud Run → Services** (not the Overview page: Services shows the
+   `.run.app` URLs, which are the proof). Three services green: `acc-api`,
+   `acc-web`, `acc-mock-enterprise`, with their region and last deployment.
+2. Click **`acc-api`** → the URL banner, then the **Revisions** tab. The
+   timestamped image tag (`acc-api:20260829-...`) shows a real rollout rather
+   than an ambiguous `:latest`.
+3. The **`.run.app` URL** in the address bar of the running Mission Control.
+4. *(if time allows)* **Cloud Logging**, filtered on
    `jsonPayload.mission_id="MIS-1001"` — the structured JSON logs of the very
-   mission just demonstrated
+   mission just demonstrated.
+
+> **Set the console language to English before recording.** Avatar (top right)
+> → Preferences → Language. The rules require the video in English or
+> subtitled; a console in another language is a gratuitous inconsistency the
+> judges watch for twenty seconds.
 
 > "Everything you have just seen runs on Cloud Run, with Firestore as the
 > durable source of truth and Pub/Sub for asynchronous continuation. The

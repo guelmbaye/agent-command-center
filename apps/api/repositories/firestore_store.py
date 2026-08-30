@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from typing import Any, TypeVar
 
+from apps.api.core.logging import get_logger
 from domain.enums import TaskStatus
 from domain.errors import StateVersionConflict
 from domain.models import (
@@ -35,6 +36,8 @@ from domain.models import (
 
 T = TypeVar("T", bound=ACCModel)
 
+logger = get_logger("acc.store.firestore")
+
 MISSIONS = "missions"
 AGENTS = "agents"
 IDEMPOTENCY = "idempotency"
@@ -42,11 +45,15 @@ SECURITY = "security_events"
 
 
 class FirestoreStore:
-    def __init__(self, project: str, database: str = "(default)") -> None:
+    def __init__(self, project: str, database: str = "(default)",
+                 demo_mode: bool = False) -> None:
         from google.cloud import firestore  # late import: optional locally
 
         self._fs = firestore
         self.db = firestore.AsyncClient(project=project or None, database=database)
+        # Whether `reset()` is allowed at all. Passed in rather than read from
+        # a global, so the store cannot purge data the caller never authorised.
+        self._demo_mode = demo_mode
 
     # --- Helpers -----------------------------------------------------------
     def _mission_doc(self, mission_id: str):
@@ -294,6 +301,50 @@ class FirestoreStore:
     async def put_idempotent(self, key: str, value: dict[str, Any]) -> None:
         await self.db.collection(IDEMPOTENCY).document(key).set(value)
 
+    # Sub-collections written under each mission document.
+    MISSION_SUBCOLLECTIONS = (
+        "tasks", "events", "checkpoints", "recoveries", "approvals",
+        "memory", "audit", "executions", "policies",
+    )
+
     async def reset(self) -> None:
-        """Deliberately inert outside demo mode: production is never purged."""
-        raise NotImplementedError("reset() est reserve au store memoire / mode demo")
+        """Clear demo data. Refuses outright when demo mode is off.
+
+        This used to raise NotImplementedError, so the Reset control did
+        nothing once deployed: missions from every rehearsal piled up, and the
+        first thing shown to a judge was a stale approval from an earlier run.
+
+        Firestore has no recursive delete in the client library — sub-documents
+        survive their parent. Each sub-collection is therefore drained
+        explicitly; missing one would leave orphans that no mission lists and
+        nothing ever removes.
+        """
+        if not self._demo_mode:
+            raise NotImplementedError(
+                "reset() is restricted to demo mode: production is never purged")
+
+        deleted = 0
+
+        # Collect first, delete after: mutating a collection while streaming it
+        # is not guaranteed to visit every document.
+        missions = [snapshot.reference
+                    async for snapshot in self.db.collection(MISSIONS).stream()]
+        for mission in missions:
+            for name in self.MISSION_SUBCOLLECTIONS:
+                docs = [snapshot.reference
+                        async for snapshot in mission.collection(name).stream()]
+                for doc in docs:
+                    await doc.delete()
+                    deleted += 1
+            await mission.delete()
+            deleted += 1
+
+        for collection in ("approvals_index", SECURITY, IDEMPOTENCY):
+            docs = [snapshot.reference
+                    async for snapshot in self.db.collection(collection).stream()]
+            for doc in docs:
+                await doc.delete()
+                deleted += 1
+
+        logger.info("demo_reset_completed",
+                    extra={"backend": "firestore", "documents": deleted})

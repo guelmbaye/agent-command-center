@@ -189,3 +189,104 @@ def test_a_successful_execution_never_degrades():
     from domain.models import AgentResult
 
     assert _indicts_the_agent(AgentResult()) is False
+
+
+# ---------------------------------------------------------------------------
+# The diagnostic must fit its target
+#
+# Run against a Cloud Run URL, the doctor checked port 80, `apps/web/.env.local`
+# and a LOCAL enterprise mock — three failures that say nothing about the
+# deployment, and that buried the one line which mattered.
+# ---------------------------------------------------------------------------
+def test_doctor_distinguishes_local_from_deployed():
+    source = (ROOT / "scripts" / "doctor.py").read_text(encoding="utf-8")
+    assert "def is_remote(" in source
+    assert "def check_remote_service(" in source
+    assert ".run.app" in source
+
+    # Local-only checks must not run against a deployed target.
+    remote_branch = source[source.index("if is_remote(args.api):"):
+                           source.index("port = int(args.api")]
+    for local_only in ("check_ports", "check_frontend_config", "check_enterprise"):
+        assert local_only not in remote_branch, (
+            f"{local_only} is meaningless against a deployed URL"
+        )
+
+
+def test_doctor_names_a_cloud_run_html_404():
+    """Google's own 404 page must be named, and shown as a warning.
+
+    An earlier version asserted a BLOCKING verdict here. That was wrong: the
+    same page appears on a service that is serving perfectly (ADR-047), so the
+    probe reports a fact and the verdict comes later, from all the facts.
+    """
+    source = (ROOT / "scripts" / "doctor.py").read_text(encoding="utf-8")
+    assert "Cloud Run's own HTML page" in source
+    assert "curl -i" in source, "the operator must be able to see the raw answer"
+    assert "status.conditions" in source, (
+        "the remedy must point at the service state, not at the app"
+    )
+
+
+def test_doctor_accepts_an_api_key_for_deployed_routes():
+    source = (ROOT / "scripts" / "doctor.py").read_text(encoding="utf-8")
+    assert "--api-key" in source
+    assert '"x-api-key": api_key' in source
+
+
+def test_doctor_tolerates_a_cold_start():
+    """A Cloud Run instance scaled to zero takes seconds to boot.
+
+    The first request pays for it. Reading Cloud Run's own holding page as
+    "this is not ACC" was wrong: the service was fine, it was asleep — and the
+    4 s timeout was a local figure, not a cold-start one.
+    """
+    source = (ROOT / "scripts" / "doctor.py").read_text(encoding="utf-8")
+    assert "def wake_up(" in source
+    assert "REMOTE_TIMEOUT" in source
+
+    timeout = re.search(r"REMOTE_TIMEOUT = ([\d.]+)", source)
+    assert timeout and float(timeout.group(1)) >= 15, (
+        "a cold start routinely exceeds 15 s"
+    )
+    assert "cold start, retrying" in source
+
+
+def test_cold_start_retry_is_bounded():
+    """A diagnostic must terminate, even against a dead service."""
+    source = (ROOT / "scripts" / "doctor.py").read_text(encoding="utf-8")
+    start = source.index("def wake_up(")
+    end = source.index("def check_remote_service(")
+    body = source[start:end]
+    assert "for attempt in range(1, 4)" in body
+    assert "while True" not in body
+
+
+def test_doctor_weighs_the_evidence_before_condemning():
+    """Four passing checks outweigh one failing probe.
+
+    Observed: /healthz answered Cloud Run's HTML page while all four /api/v1
+    routes returned 200. The verdict was "1 blocking problem" — on a service
+    that was demonstrably serving. A diagnostic that condemns a working system
+    trains its reader to ignore it.
+    """
+    source = (ROOT / "scripts" / "doctor.py").read_text(encoding="utf-8")
+    assert "healthy_routes" in source
+    assert "probe_failed" in source
+    assert "The service IS serving" in source
+
+    # The failing probe must be a warning, and the verdict must come after the
+    # routes have been tested — not before.
+    probe_branch = source[source.index('elif status == 404 and "<html"'):
+                          source.index('elif status in (401, 403)')]
+    assert "report(WARN" in probe_branch, (
+        "one failing probe must not be a blocking verdict on its own"
+    )
+    assert source.index("healthy_routes = 0") < source.index("if probe_failed and healthy_routes")
+
+
+def test_doctor_still_condemns_a_dead_service():
+    """Weighing evidence must not mean excusing everything."""
+    source = (ROOT / "scripts" / "doctor.py").read_text(encoding="utf-8")
+    assert 'report(BAD, "No route answered"' in source
+    assert "status.conditions" in source

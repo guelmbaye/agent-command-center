@@ -250,5 +250,5 @@ def build_failure_twin(**kwargs) -> ACCAgent:
         output_schema_hint=RECOVERY_PLAN_SCHEMA,
         parser=parse_recovery_plan,
         fallback=_fallback,  # type: ignore[arg-type]
-        description="Diagnostique les echecs et selectionne la meilleure recovery permise.",
+        description="Diagnoses failures and selects the best permitted recovery.",
     ), **kwargs)

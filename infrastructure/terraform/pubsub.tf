@@ -20,7 +20,14 @@ resource "google_pubsub_subscription" "engine" {
   message_retention_duration = "86400s"
 
   push_config {
-    push_endpoint = "${google_cloud_run_v2_service.api.uri}/api/v1/events/pubsub"
+    # The token travels in the query string: a push subscription cannot send
+    # custom headers. Authentication is layered — Cloud Run verifies the OIDC
+    # token below, and the application checks this shared secret.
+    push_endpoint = join("", [
+      google_cloud_run_v2_service.api.uri,
+      "/api/v1/events/pubsub?token=",
+      random_password.pubsub_push_token.result,
+    ])
 
     oidc_token {
       service_account_email = google_service_account.pubsub_invoker.email

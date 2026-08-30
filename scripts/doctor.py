@@ -13,6 +13,7 @@ import argparse
 import json
 import os
 import socket
+import time
 import sys
 import urllib.error
 import urllib.request
@@ -42,13 +43,15 @@ def probe_port(host: str, port: int, family: int) -> bool:
         return False
 
 
-def fetch(url: str, timeout: float = 4.0) -> tuple[int, str, dict | None, str]:
+def fetch(url: str, timeout: float = 4.0,
+          headers: dict[str, str] | None = None) -> tuple[int, str, dict | None, str]:
     """Return (status, body, json, server).
 
     The `Server` header is the single most useful piece of diagnostic data: it
     names the process that intercepted the call (llama.cpp, Apache, ...).
     """
-    request = urllib.request.Request(url, headers={"Accept": "application/json"})
+    request = urllib.request.Request(
+        url, headers={"Accept": "application/json", **(headers or {})})
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             raw = response.read().decode("utf-8", "replace")
@@ -183,6 +186,7 @@ def check_routes(base: str) -> None:
                  "/api/v1/missions"):
         status, raw, payload, _ = fetch(f"{base}{path}")
         if status == 200:
+            healthy_routes += 1
             report(OK, f"{path} -> 200")
         elif status == 401:
             # A single root cause: print the remedy only once.
@@ -296,15 +300,190 @@ def check_enterprise(url: str, acc_running: bool) -> None:
         report(BAD, f"Unexpected response (HTTP {status}): {raw[:80]}")
 
 
+def is_remote(base: str) -> bool:
+    """A deployed target has nothing local to check.
+
+    Checking port 80, `apps/web/.env.local` and a local enterprise mock against
+    a Cloud Run URL produces three failures that say nothing about the
+    deployment — and buries the one line that matters.
+    """
+    return base.startswith("https://") or ".run.app" in base
+
+
+# A Cloud Run instance scaled to zero takes several seconds to boot. The first
+# request pays for it: 4 s is a local timeout, not a cold-start one.
+REMOTE_TIMEOUT = 25.0
+
+
+def wake_up(base: str) -> tuple[int, str, dict | None, str]:
+    """First contact with a service that may be scaled to zero.
+
+    Until an instance is ready, Cloud Run answers the caller itself — with its
+    own HTML page. Reading that as "this is not ACC" was wrong: the service was
+    fine, it was asleep. So the first call is retried before any verdict.
+    """
+    for attempt in range(1, 4):
+        result = fetch(f"{base}/healthz", timeout=REMOTE_TIMEOUT)
+        status, raw, payload, _ = result
+        if payload or status not in (0, 404, 429, 502, 503):
+            return result
+        if attempt < 3:
+            print(f"          cold start, retrying ({attempt}/3)...")
+            time.sleep(4)
+    return result
+
+
+def _check_remote_preflight(base: str, origin: str) -> None:
+    """The one thing curl never tells you by accident.
+
+    A browser sends an OPTIONS preflight before any cross-origin call. `curl`
+    does not, so an API can answer every GET perfectly and still be unusable
+    from Mission Control. This check reproduces exactly what the browser does,
+    and reports what came back.
+    """
+    if not origin:
+        origin = base.replace("acc-api", "acc-web")
+
+    print(f"\n-- CORS preflight (origin {origin}) --")
+    request = urllib.request.Request(
+        f"{base}/api/v1/missions", method="OPTIONS",
+        headers={
+            "Origin": origin,
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type,x-api-key",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=REMOTE_TIMEOUT) as response:
+            status, headers = response.status, dict(response.headers)
+    except urllib.error.HTTPError as exc:
+        status, headers = exc.code, dict(exc.headers)
+    except Exception as exc:
+        report(BAD, f"Preflight failed: {exc}")
+        return
+
+    allowed = headers.get("Access-Control-Allow-Origin")
+    server = headers.get("Server", "")
+    if allowed == origin or allowed == "*":
+        report(OK, f"Preflight allowed (HTTP {status}, origin echoed)")
+        return
+
+    if status == 404:
+        report(BAD, f"Preflight -> HTTP 404, Server: {server or 'unknown'}",
+               "The OPTIONS request did not reach the container. Confirm with:\n"
+               "          gcloud run services logs read acc-api "
+               "--region=REGION --limit=20\n"
+               "          If no OPTIONS line appears, the request stops before "
+               "the app.")
+        return
+
+    report(BAD, f"Preflight -> HTTP {status}, no Access-Control-Allow-Origin",
+           f"Server: {server or 'unknown'}. The app answered but refused the "
+           f"origin: check ACC_CORS_ORIGIN_REGEX against {origin}")
+
+
+def check_remote_service(base: str, api_key: str, origin: str = "") -> None:
+    """What actually matters on a deployed instance."""
+    print(f"\n-- Deployed service {base} --")
+    probe_failed = False
+    status, raw, payload, server = wake_up(base)
+
+    if payload and payload.get("service") == "acc-api":
+        report(OK, "ACC Control Plane is answering")
+        for key in ("env", "persistence", "event_bus", "agent_mode",
+                    "model_armor", "demo_mode"):
+            if key in payload:
+                print(f"          {key:<14}= {payload.get(key)}")
+    elif status == 0:
+        report(BAD, f"Unreachable: {raw}")
+    elif status == 404 and "<html" in raw.lower():
+        # Deliberately NOT a blocking verdict yet. If the /api/v1 routes below
+        # answer, the service is demonstrably up and only this probe is odd —
+        # declaring the whole deployment broken on one failing check, while
+        # four others pass, is how a diagnostic misleads.
+        probe_failed = True
+        report(WARN, "/healthz answers with Cloud Run's own HTML page",
+               "Checking the API routes before drawing any conclusion.\n"
+               "          To see the raw answer:\n"
+               f"          curl -i {base}/healthz")
+    elif status in (401, 403):
+        report(BAD, f"HTTP {status} on /healthz",
+               "The probe must stay open. Check that api_public grants "
+               "roles/run.invoker to allUsers.")
+    else:
+        report(BAD, f"Unexpected response (HTTP {status})", raw[:120])
+        return
+
+    print(f"\n-- API routes --")
+    headers = {"x-api-key": api_key} if api_key else {}
+    healthy_routes = 0
+    if not api_key:
+        report(WARN, "No API key provided",
+               "Deployed routes require one:\n"
+               "          $env:ACC_API_KEY = gcloud secrets versions access "
+               "latest --secret=acc-api-key --project=PROJECT\n"
+               "          python scripts/doctor.py --api URL")
+        return
+
+    for path in ("/api/v1/policy", "/api/v1/agents", "/api/v1/metrics",
+                 "/api/v1/missions"):
+        status, raw, payload, _ = fetch(f"{base}{path}", timeout=REMOTE_TIMEOUT,
+                                        headers=headers)
+        if status == 200:
+            healthy_routes += 1
+            report(OK, f"{path} -> 200")
+        elif status == 401:
+            report(BAD, f"{path} -> 401",
+                   "The key does not match the deployed secret. Read it again "
+                   "with `gcloud secrets versions access latest "
+                   "--secret=acc-api-key`.")
+        else:
+            report(BAD, f"{path} -> {status}", raw[:100])
+
+    _check_remote_preflight(base, origin)
+
+    if probe_failed and healthy_routes:
+        print(f"\n{OK} The service IS serving: {healthy_routes}/4 API routes "
+              f"answered 200.")
+        print("          Only /healthz is odd. ACC is usable; the Cloud Run "
+              "startup")
+        print("          probe targets that same path and passed, so the "
+              "container")
+        print("          answers it internally. Investigate later, not now.")
+    elif probe_failed:
+        report(BAD, "No route answered",
+               "The service is genuinely unreachable. Check:\n"
+               "          gcloud run services describe acc-api "
+               "--region=REGION --format='value(status.url)'\n"
+               "          gcloud run services describe acc-api "
+               "--region=REGION --format='value(status.conditions)'")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--api", default="http://127.0.0.1:8080")
     parser.add_argument("--enterprise", default="http://127.0.0.1:8081")
+    parser.add_argument("--origin", default="",
+                        help="browser origin to test the CORS preflight with "
+                             "(defaults to the acc-web URL)")
+    parser.add_argument("--api-key", default=os.environ.get("ACC_API_KEY", ""),
+                        help="required for the deployed /api/v1 routes")
     args = parser.parse_args()
 
     print("=" * 66)
     print("  ACC — local installation diagnostic")
     print("=" * 66)
+
+    if is_remote(args.api):
+        check_remote_service(args.api, args.api_key, args.origin)
+        print("\n" + "=" * 66)
+        if problems:
+            print(f"  {len(problems)} blocking problem(s):")
+            for problem in problems:
+                print(f"    - {problem}")
+            return 1
+        print("  No blocking problem detected.")
+        return 0
 
     port = int(args.api.rsplit(":", 1)[-1]) if ":" in args.api.rsplit("/", 1)[-1] else 80
     check_ports(port)

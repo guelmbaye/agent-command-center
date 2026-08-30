@@ -41,6 +41,16 @@ class AgentInvocation:
                 "stage": self.mission.current_stage,
                 "deadline_hours": ctx.deadline_hours,
                 "required_units": ctx.required_units,
+                # THE supplier to act on. Resolved here, once, rather than
+                # left as a precedence rule for the model to apply.
+                #
+                # The context used to expose `primary_supplier` and
+                # `selected_supplier` side by side. After a recovery switched
+                # to SUP-B, the model kept checking the primary — SUP-A, still
+                # returning 503 — and the mission looped through three
+                # recoveries into `recovery_exhausted`. The deterministic path
+                # read `selected or primary` and was unaffected.
+                "current_supplier": ctx.selected_supplier or ctx.primary_supplier,
                 "primary_supplier": ctx.primary_supplier,
                 "fallback_suppliers": ctx.fallback_suppliers,
                 "selected_supplier": ctx.selected_supplier,

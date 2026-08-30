@@ -11,7 +11,7 @@ ACC_API ?= http://127.0.0.1:$(PORT)
 PY ?= python
 
 .PHONY: install run run-mock web web-install web-build stack test scenario \
-        audit doctor costs teardown fmt
+        audit doctor deploy plan costs teardown fmt
 
 install:
 	pip install -r requirements.txt
@@ -49,8 +49,14 @@ audit:
 doctor:
 	$(PY) scripts/doctor.py --api $(ACC_API) --enterprise http://127.0.0.1:$(MOCK_PORT)
 
+deploy:
+	$(PY) scripts/deploy.py $(ARGS)
+
+plan:
+	$(PY) scripts/deploy.py --plan-only
+
 costs:
-	./scripts/costs.sh
+	$(PY) scripts/costs.py
 
 teardown:
-	./scripts/teardown.sh
+	$(PY) scripts/teardown.py

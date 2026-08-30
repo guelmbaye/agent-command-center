@@ -5,7 +5,6 @@ Doc 08 §31: these endpoints never mutate production mission state.
 """
 from __future__ import annotations
 
-import httpx
 from fastapi import APIRouter, Depends
 
 from apps.api.core.logging import get_logger
@@ -13,6 +12,7 @@ from apps.api.routes.deps import container_dep, require_api_key, require_demo_mo
 from apps.api.schemas.api import DemoScenarioResponse
 from apps.api.services.container import Container
 from domain import ids
+from domain.errors import DemoControlFailed
 
 logger = get_logger("acc.demo")
 
@@ -23,11 +23,22 @@ router = APIRouter(
 
 
 async def _enterprise(c: Container, method: str, path: str, **kwargs) -> dict:
-    async with httpx.AsyncClient(base_url=c.settings.acc_enterprise_base_url,
-                                 timeout=5.0) as client:
-        response = await client.request(method, path, **kwargs)
-        response.raise_for_status()
-        return response.json()
+    """Reach the enterprise systems through the SHARED client.
+
+    This helper used to build its own `httpx.AsyncClient`. That client knew
+    nothing about Cloud Run identity tokens, so every demo control — reset,
+    failure injection, hostile injection — was refused once deployed and
+    surfaced as a bare 500.
+
+    The authentication fix (ADR-057) had been applied to `EnterpriseToolClient`
+    only. Two clients, one of them corrected: exactly the defect of ADR-051, in
+    a second code path.
+    """
+    result = await c.tools.call("demo", method, path, **kwargs)
+    if not result.ok:
+        raise DemoControlFailed(
+            f"Enterprise systems unreachable at {path}: {result.error}")
+    return result.data or {}
 
 
 @router.post("/fail/supplier-a", response_model=DemoScenarioResponse)
@@ -52,7 +63,7 @@ async def inject_malicious_input(c: Container = Depends(container_dep)) -> DemoS
     await _enterprise(c, "POST", "/demo/suppliers/SUP-B/poison")
     return DemoScenarioResponse(
         scenario="malicious_input", enabled=True,
-        detail="SUP-B injecte une instruction de contournement de politique",
+        detail="SUP-B now injects a policy-bypass instruction",
     )
 
 
@@ -82,16 +93,36 @@ async def run_hero_scenario(c: Container = Depends(container_dep)) -> DemoScenar
     mission = await c.engine.create_mission("Protect production schedule")
     return DemoScenarioResponse(
         scenario="hero", enabled=True, mission_id=mission.mission_id,
-        detail="Mission prete. Demarrer, puis injecter la panne SUP-A.",
+        detail="Mission ready. Start it, then inject the SUP-A failure.",
     )
 
 
 @router.post("/reset", response_model=DemoScenarioResponse)
 async def reset(c: Container = Depends(container_dep)) -> DemoScenarioResponse:
-    await _enterprise(c, "POST", "/demo/reset")
-    await c.store.reset()
+    """Clear ACC and the simulated enterprise systems.
+
+    Each step says which one failed. A bare 500 on a demo control, minutes
+    before a recording, tells the operator nothing about where to look.
+    """
+    try:
+        await _enterprise(c, "POST", "/demo/reset")
+    except DemoControlFailed:
+        raise
+    except Exception as exc:  # noqa: BLE001 - reported, never swallowed
+        logger.exception("demo_reset_enterprise_failed")
+        raise DemoControlFailed(f"Enterprise reset failed: {exc}") from exc
+
+    try:
+        await c.store.reset()
+    except NotImplementedError as exc:
+        raise DemoControlFailed(
+            "Reset is restricted to demo mode (ACC_DEMO_MODE=1)") from exc
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("demo_reset_store_failed")
+        raise DemoControlFailed(f"Store reset failed: {exc}") from exc
+
     await c.registry.bootstrap()
     ids.reset_counters()
     logger.info("demo_reset")
     return DemoScenarioResponse(scenario="reset", enabled=True,
-                                detail="Etat ACC et systemes entreprise reinitialises")
+                                detail="ACC and enterprise systems reset")

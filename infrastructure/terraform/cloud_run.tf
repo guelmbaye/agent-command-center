@@ -4,7 +4,17 @@
 resource "google_cloud_run_v2_service" "mock" {
   name     = "acc-mock-enterprise"
   location = var.region
-  ingress  = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
+
+  # Provider v6 defaults to deletion_protection = true, which blocks BOTH a
+  # replacement and `terraform destroy`. For a demo environment that is exactly
+  # backwards: the service must be replaceable after a failed revision, and
+  # `make teardown` must be able to bring billing back to zero.
+  deletion_protection = false
+  # NOT internal-only: a Cloud Run service calling another over its public URL
+  # leaves the Google network and comes back, so internal-only ingress rejects
+  # it — with a 404 that reads like a missing route, not a blocked request.
+  # Access stays restricted by IAM: only acc-api holds run.invoker (iam.tf).
+  ingress  = "INGRESS_TRAFFIC_ALL"
 
   # Labels de coût : permettent de ventiler la facture par composant
   # (Rapports de facturation -> Grouper par -> Label).
@@ -40,6 +50,12 @@ resource "google_cloud_run_v2_service" "mock" {
 resource "google_cloud_run_v2_service" "api" {
   name     = "acc-api"
   location = var.region
+
+  # Provider v6 defaults to deletion_protection = true, which blocks BOTH a
+  # replacement and `terraform destroy`. For a demo environment that is exactly
+  # backwards: the service must be replaceable after a failed revision, and
+  # `make teardown` must be able to bring billing back to zero.
+  deletion_protection = false
   ingress  = "INGRESS_TRAFFIC_ALL"
 
   labels = merge(local.cost_labels, { component = "control-plane" })
@@ -122,6 +138,25 @@ resource "google_cloud_run_v2_service" "api" {
         name  = "OTEL_TRACES_EXPORTER"
         value = "gcp"
       }
+      # CORS. Without these the control plane allows no origin in cloud mode,
+      # and the browser blocks every call from Mission Control — while `curl`
+      # keeps working, which is exactly how this stayed invisible.
+      #
+      # Deliberately NOT `google_cloud_run_v2_service.web.uri`: referencing the
+      # web service from the API creates a Terraform dependency cycle as soon
+      # as anything points back. The regex already covers both Cloud Run URL
+      # formats, so no cross-service reference is needed at all.
+      #
+      # Starlette does NOT expand wildcards in allow_origins, hence the regex.
+      env {
+        name  = "ACC_CORS_ORIGINS"
+        value = var.cors_origins
+      }
+      env {
+        name  = "ACC_CORS_ORIGIN_REGEX"
+        value = var.cors_origin_regex
+      }
+
       env {
         name  = "ACC_DEMO_MODE"
         value = "1"
@@ -157,9 +192,16 @@ resource "google_cloud_run_v2_service" "api" {
     }
   }
 
+  # Cloud Run reads `versions/latest`. Terraform infers a dependency on the
+  # SECRET (via secret_id), never on its VERSION — so without listing the
+  # versions here, the service can be created before any version exists and the
+  # revision fails with:
+  #   Secret .../acc-api-key/versions/latest was not found
   depends_on = [
     google_project_service.enabled,
     google_firestore_database.acc,
+    google_secret_manager_secret_version.api_key,
+    google_secret_manager_secret_version.pubsub_push_token,
   ]
 }
 
@@ -183,6 +225,12 @@ resource "google_service_account" "web" {
 resource "google_cloud_run_v2_service" "web" {
   name     = "acc-web"
   location = var.region
+
+  # Provider v6 defaults to deletion_protection = true, which blocks BOTH a
+  # replacement and `terraform destroy`. For a demo environment that is exactly
+  # backwards: the service must be replaceable after a failed revision, and
+  # `make teardown` must be able to bring billing back to zero.
+  deletion_protection = false
   ingress  = "INGRESS_TRAFFIC_ALL"
 
   labels = merge(local.cost_labels, { component = "mission-control" })
@@ -209,10 +257,12 @@ resource "google_cloud_run_v2_service" "web" {
         container_port = 8080
       }
 
-      env {
-        name  = "NEXT_PUBLIC_ACC_API"
-        value = google_cloud_run_v2_service.api.uri
-      }
+      # NOTE: NEXT_PUBLIC_ACC_API is deliberately NOT set here. Next.js inlines
+      # `NEXT_PUBLIC_*` at BUILD time, so a runtime variable has no effect
+      # (ADR-045). It is passed as a --build-arg by scripts/deploy.py instead.
+      #
+      # Removing it also breaks a dependency cycle: the API service needs the
+      # web URL for CORS, and the web service cannot need the API URL in return.
     }
   }
 
